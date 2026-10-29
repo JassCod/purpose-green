@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Purpose Green — Build a greener tomorrow</title>
+  <meta name="description" content="Purpose Green helps people and businesses switch to clean energy, plant trees and track their climate impact." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-blob b1"></div>
+  <div class="bg-blob b2"></div>
+
+  <header class="nav">
+    <a class="logo" href="#">
+      <span class="logo-mark">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14Zm0 0 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      Purpose<b>Green</b>
+    </a>
+    <nav class="links">
+      <a href="#how">How it works</a>
+      <a href="#impact">Impact</a>
+      <a href="#projects">Projects</a>
+      <a href="#join">Pricing</a>
+    </nav>
+    <a class="btn btn-dark small" href="#join">Get started</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="pill"><i></i> Climate action, made simple</span>
+        <h1>Live with <span class="hl">purpose</span>,<br/>power a greener planet.</h1>
+        <p class="lead">Switch to clean energy, offset your footprint and watch your own little world grow — one tree, one turbine, one solar panel at a time.</p>
+        <div class="cta">
+          <a class="btn btn-green" href="#join">Start your impact <span>→</span></a>
+          <a class="btn btn-ghost" href="#how"><span class="play">▶</span> See how</a>
+        </div>
+        <div class="trust">
+          <div class="avatars"><span></span><span></span><span></span><span></span></div>
+          <p><b>48,000+</b> people already greening their world</p>
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <canvas id="scene" aria-label="3D illustration of a floating green island with wind turbines, solar panels and trees"></canvas>
+        <div class="float-card fc1">
+          <div class="ic">🌳</div>
+          <div><small>Trees planted</small><strong data-count="12480">0</strong></div>
+        </div>
+        <div class="float-card fc2">
+          <div class="ic yellow">⚡</div>
+          <div><small>Clean energy</small><strong><span data-count="86">0</span>%</strong></div>
+        </div>
+        <div class="float-card fc3">
+          <div class="ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" /><circle class="p" cx="18" cy="18" r="15" /></svg><span>72%</span></div>
+          <div><small>CO₂ reduced</small><strong>3.2 t / yr</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats" id="impact">
+      <div class="stat"><strong data-count="2.4" data-dec="1">0</strong><span>M tons CO₂ offset</span></div>
+      <div class="stat"><strong data-count="530">0</strong><span>Wind &amp; solar projects</span></div>
+      <div class="stat"><strong data-count="38">0</strong><span>Countries reached</span></div>
+      <div class="stat"><strong data-count="99">0</strong><span>% transparent tracking</span></div>
+    </section>
+
+    <section class="features" id="how">
+      <div class="section-head">
+        <span class="pill"><i></i> How it works</span>
+        <h2>Three steps to a greener footprint</h2>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <div class="card-ic c1">☀️</div>
+          <h3>Measure</h3>
+          <p>Connect your bills and habits. We calculate your carbon footprint in under two minutes.</p>
+        </article>
+        <article class="card">
+          <div class="card-ic c2">🌱</div>
+          <h3>Reduce</h3>
+          <p>Get a personal plan — switch tariffs, cut waste, and choose greener everyday options.</p>
+        </article>
+        <article class="card">
+          <div class="card-ic c3">🌍</div>
+          <h3>Restore</h3>
+          <p>Fund verified reforestation and renewable projects, and follow their progress live.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="projects" id="projects">
+      <div class="proj-text">
+        <span class="pill"><i></i> Featured project</span>
+        <h2>Coastal Wind Farm, Portugal</h2>
+        <p>24 turbines generating enough clean power for 60,000 homes. Every member gets a share of the impact — and a turbine on their own island.</p>
+        <div class="bar"><div class="fill"></div></div>
+        <div class="bar-meta"><span>€1.8M raised</span><span>78% funded</span></div>
+      </div>
+      <div class="proj-tiles">
+        <div class="tile t1"><b>☀️</b><span>Solar</span></div>
+        <div class="tile t2"><b>🌬️</b><span>Wind</span></div>
+        <div class="tile t3"><b>🌳</b><span>Forest</span></div>
+        <div class="tile t4"><b>💧</b><span>Water</span></div>
+      </div>
+    </section>
+
+    <section class="join" id="join">
+      <h2>Ready to grow your world?</h2>
+      <p>Join free today. Your first tree is on us.</p>
+      <form class="join-form" onsubmit="event.preventDefault(); this.classList.add('done'); this.querySelector('button').textContent='You\'re in 🌱';">
+        <input type="email" placeholder="you@example.com" required aria-label="Email address" />
+        <button class="btn btn-green" type="submit">Join Purpose Green</button>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <span>© 2026 Purpose Green</span>
+    <span>Made with 💚 for the planet</span>
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
