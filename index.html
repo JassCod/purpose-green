@@ -2,129 +2,104 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Purpose Green — Build a greener tomorrow</title>
-  <meta name="description" content="Purpose Green helps people and businesses switch to clean energy, plant trees and track their climate impact." />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Purpose Green — Island Lab</title>
+  <meta name="description" content="A 3D sandbox game: build a floating eco-island, experiment with sun, wind, rain and storms, and balance energy against CO₂." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="bg-blob b1"></div>
-  <div class="bg-blob b2"></div>
+  <canvas id="scene"></canvas>
 
-  <header class="nav">
-    <a class="logo" href="#">
-      <span class="logo-mark">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14Zm0 0 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </span>
-      Purpose<b>Green</b>
-    </a>
-    <nav class="links">
-      <a href="#how">How it works</a>
-      <a href="#impact">Impact</a>
-      <a href="#projects">Projects</a>
-      <a href="#join">Pricing</a>
-    </nav>
-    <a class="btn btn-dark small" href="#join">Get started</a>
-  </header>
+  <div id="hud" class="hidden">
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="brand panel">
+        <span class="logo-mark">🌱</span>
+        <div><b>Purpose<span>Green</span></b><small>Island Lab</small></div>
+      </div>
+      <div class="stats">
+        <div class="stat panel" id="st-coins" title="Coins — earned from powered houses"><i>🪙</i><div><b id="v-coins">0</b><small id="v-income">+0/s</small></div></div>
+        <div class="stat panel" id="st-energy" title="Energy produced / demanded"><i>⚡</i><div><b id="v-energy">0</b><small id="v-demand">need 0 kW</small></div></div>
+        <div class="stat panel" id="st-co2" title="Net CO₂ per year (negative is good)"><i>☁️</i><div><b id="v-co2">0</b><small>t CO₂ / yr</small></div></div>
+        <div class="stat panel" id="st-pop" title="Population"><i>🏡</i><div><b id="v-pop">0</b><small>residents</small></div></div>
+        <div class="stat panel eco" title="Eco score"><div class="eco-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15"/><circle id="eco-arc" class="p" cx="18" cy="18" r="15"/></svg><b id="v-eco">50</b></div><div><b>Eco</b><small id="v-grade">Okay</small></div></div>
+      </div>
+    </div>
 
-  <main>
-    <section class="hero">
-      <div class="hero-copy">
-        <span class="pill"><i></i> Climate action, made simple</span>
-        <h1>Live with <span class="hl">purpose</span>,<br/>power a greener planet.</h1>
-        <p class="lead">Switch to clean energy, offset your footprint and watch your own little world grow — one tree, one turbine, one solar panel at a time.</p>
-        <div class="cta">
-          <a class="btn btn-green" href="#join">Start your impact <span>→</span></a>
-          <a class="btn btn-ghost" href="#how"><span class="play">▶</span> See how</a>
+    <!-- missions -->
+    <aside class="missions panel" id="missions">
+      <header><span>🎯 Missions</span><em id="m-count">0/0</em></header>
+      <ul id="m-list"></ul>
+    </aside>
+
+    <!-- lab -->
+    <aside class="lab panel" id="lab">
+      <header><span>🧪 Experiment Lab</span><button class="icon-btn" id="lab-toggle" aria-label="Collapse lab">–</button></header>
+      <div class="lab-body">
+        <label class="ctl">
+          <span>🕒 Time of day <em id="v-time">12:00</em></span>
+          <input type="range" id="c-time" min="0" max="24" step="0.05" value="11" />
+        </label>
+        <div class="row">
+          <button class="chip" id="c-cycle">⏵ Day cycle</button>
+          <button class="chip" id="c-night">🌙 Night</button>
+          <button class="chip" id="c-noon">☀️ Noon</button>
         </div>
-        <div class="trust">
-          <div class="avatars"><span></span><span></span><span></span><span></span></div>
-          <p><b>48,000+</b> people already greening their world</p>
+        <label class="ctl">
+          <span>🌬️ Wind speed <em id="v-wind">45 km/h</em></span>
+          <input type="range" id="c-wind" min="0" max="100" step="1" value="45" />
+        </label>
+        <div class="row">
+          <button class="chip" id="c-rain">🌧️ Rain</button>
+          <button class="chip" id="c-storm">⛈️ Storm</button>
+        </div>
+        <label class="ctl">
+          <span>🌱 Growth speed <em id="v-grow">1×</em></span>
+          <input type="range" id="c-grow" min="0.25" max="3" step="0.25" value="1" />
+        </label>
+        <div class="readout" id="readout"></div>
+        <div class="row">
+          <button class="chip" id="c-random">🎲 Random island</button>
+          <button class="chip danger" id="c-reset">🧹 Clear</button>
+        </div>
+        <div class="row">
+          <button class="chip" id="c-photo">📷 Photo mode</button>
+          <button class="chip" id="c-sound">🔊 Sound</button>
         </div>
       </div>
+    </aside>
 
-      <div class="hero-visual">
-        <canvas id="scene" aria-label="3D illustration of a floating green island with wind turbines, solar panels and trees"></canvas>
-        <div class="float-card fc1">
-          <div class="ic">🌳</div>
-          <div><small>Trees planted</small><strong data-count="12480">0</strong></div>
-        </div>
-        <div class="float-card fc2">
-          <div class="ic yellow">⚡</div>
-          <div><small>Clean energy</small><strong><span data-count="86">0</span>%</strong></div>
-        </div>
-        <div class="float-card fc3">
-          <div class="ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" /><circle class="p" cx="18" cy="18" r="15" /></svg><span>72%</span></div>
-          <div><small>CO₂ reduced</small><strong>3.2 t / yr</strong></div>
-        </div>
+    <!-- selected item info -->
+    <div class="info panel" id="info"></div>
+
+    <!-- hotbar -->
+    <nav class="hotbar panel" id="hotbar"></nav>
+
+    <div class="hint" id="hint">Click the island to place · <kbd>R</kbd> rotate · drag to orbit · scroll to zoom · <kbd>H</kbd> hide UI</div>
+    <div class="toasts" id="toasts"></div>
+  </div>
+
+  <!-- title screen -->
+  <div id="title">
+    <div class="title-card">
+      <div class="badge">🌍 A tiny planet sandbox</div>
+      <h1>Purpose<span>Green</span></h1>
+      <p>Build a floating island that breathes. Plant forests, raise turbines, light up homes — then play with the sun, wind and storms and watch what happens to your energy and CO₂.</p>
+      <button id="play">▶ PLAY</button>
+      <div class="keys">
+        <span><kbd>1</kbd>–<kbd>0</kbd> tools</span>
+        <span><kbd>X</kbd> bulldozer</span>
+        <span><kbd>R</kbd> rotate</span>
+        <span><kbd>H</kbd> photo mode</span>
       </div>
-    </section>
+    </div>
+  </div>
 
-    <section class="stats" id="impact">
-      <div class="stat"><strong data-count="2.4" data-dec="1">0</strong><span>M tons CO₂ offset</span></div>
-      <div class="stat"><strong data-count="530">0</strong><span>Wind &amp; solar projects</span></div>
-      <div class="stat"><strong data-count="38">0</strong><span>Countries reached</span></div>
-      <div class="stat"><strong data-count="99">0</strong><span>% transparent tracking</span></div>
-    </section>
+  <div id="flash"></div>
 
-    <section class="features" id="how">
-      <div class="section-head">
-        <span class="pill"><i></i> How it works</span>
-        <h2>Three steps to a greener footprint</h2>
-      </div>
-      <div class="grid">
-        <article class="card">
-          <div class="card-ic c1">☀️</div>
-          <h3>Measure</h3>
-          <p>Connect your bills and habits. We calculate your carbon footprint in under two minutes.</p>
-        </article>
-        <article class="card">
-          <div class="card-ic c2">🌱</div>
-          <h3>Reduce</h3>
-          <p>Get a personal plan — switch tariffs, cut waste, and choose greener everyday options.</p>
-        </article>
-        <article class="card">
-          <div class="card-ic c3">🌍</div>
-          <h3>Restore</h3>
-          <p>Fund verified reforestation and renewable projects, and follow their progress live.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="projects" id="projects">
-      <div class="proj-text">
-        <span class="pill"><i></i> Featured project</span>
-        <h2>Coastal Wind Farm, Portugal</h2>
-        <p>24 turbines generating enough clean power for 60,000 homes. Every member gets a share of the impact — and a turbine on their own island.</p>
-        <div class="bar"><div class="fill"></div></div>
-        <div class="bar-meta"><span>€1.8M raised</span><span>78% funded</span></div>
-      </div>
-      <div class="proj-tiles">
-        <div class="tile t1"><b>☀️</b><span>Solar</span></div>
-        <div class="tile t2"><b>🌬️</b><span>Wind</span></div>
-        <div class="tile t3"><b>🌳</b><span>Forest</span></div>
-        <div class="tile t4"><b>💧</b><span>Water</span></div>
-      </div>
-    </section>
-
-    <section class="join" id="join">
-      <h2>Ready to grow your world?</h2>
-      <p>Join free today. Your first tree is on us.</p>
-      <form class="join-form" onsubmit="event.preventDefault(); this.classList.add('done'); this.querySelector('button').textContent='You\'re in 🌱';">
-        <input type="email" placeholder="you@example.com" required aria-label="Email address" />
-        <button class="btn btn-green" type="submit">Join Purpose Green</button>
-      </form>
-    </section>
-  </main>
-
-  <footer>
-    <span>© 2026 Purpose Green</span>
-    <span>Made with 💚 for the planet</span>
-  </footer>
-
-  <script type="module" src="main.js"></script>
+  <script type="module" src="game.js"></script>
 </body>
 </html>
