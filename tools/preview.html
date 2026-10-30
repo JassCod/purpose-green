@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Model Gallery</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#9cc8e8;font-family:system-ui,sans-serif}#l{position:fixed;left:10px;top:10px;color:#fff;font-weight:700;text-shadow:0 1px 4px #000}</style>
+</head>
+<body>
+<div id="l">Purpose Green — Blender models (drag to orbit)</div>
+<script type="module">
+import * as THREE from '../vendor/three.module.js';
+import { OrbitControls } from '../vendor/OrbitControls.js';
+import { GLTFLoader } from '../vendor/GLTFLoader.js';
+import { Sky } from '../vendor/Sky.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.55;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 2000);
+const controls = new OrbitControls(camera, renderer.domElement);
+
+const sky = new Sky();
+sky.scale.setScalar(1000);
+const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(55), THREE.MathUtils.degToRad(200));
+Object.assign(sky.material.uniforms, {});
+sky.material.uniforms.sunPosition.value.copy(sunDir);
+sky.material.uniforms.turbidity.value = 3;
+sky.material.uniforms.rayleigh.value = 1.2;
+scene.add(sky);
+const pm = new THREE.PMREMGenerator(renderer);
+scene.environment = pm.fromScene(sky).texture;
+const sun = new THREE.DirectionalLight(0xfff2dd, 3);
+sun.position.copy(sunDir).multiplyScalar(60);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, far: 200 });
+sun.shadow.bias = -0.0003;
+scene.add(sun, new THREE.HemisphereLight(0xcfe6ff, 0x7a8a5a, 0.6));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x6f8f4f, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const names = (new URLSearchParams(location.search).get('m') || 'house_0,house_1,house_2,house_3,house_4,apartment_0,apartment_1,apartment_2,office_0,office_1,office_2,office_3,shop_0,shop_1,shop_2,shop_3,farm_0,farm_1,factory,coal,solar,wind,pump,tower,landfill,school,hospital,police,fire,park_0,park_1,oak_0,oak_1,pine_0,pine_1,car,truck,person,streetlight').split(',');
+const loader = new GLTFLoader();
+const cols = Math.ceil(Math.sqrt(names.length));
+const gap = +(new URLSearchParams(location.search).get('gap') || 5);
+let done = 0;
+names.forEach((n, k) => loader.load(`../assets/models/${n}.gltf`, (g) => {
+  g.scene.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = o.receiveShadow = true;
+      const m = o.material;
+      if (m.name === 'Leaves' || m.name === 'Needles') { m.alphaTest = 0.5; m.transparent = false; m.side = THREE.DoubleSide; }
+    }
+  });
+  g.scene.position.set((k % cols - cols / 2) * gap, 0, (Math.floor(k / cols) - cols / 2) * gap);
+  scene.add(g.scene);
+  if (++done === names.length) window.READY = true;
+}, undefined, (e) => { console.error(n, e); if (++done === names.length) window.READY = true; }));
+const view = (new URLSearchParams(location.search).get('v') || '').split(',').map(Number);
+if (view.length === 6) { camera.position.set(view[0], view[1], view[2]); controls.target.set(view[3], view[4], view[5]); }
+else { camera.position.set(cols * gap * 0.55, cols * gap * 0.45, cols * gap * 0.75); controls.target.set(0, 0, 0); }
+controls.update();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

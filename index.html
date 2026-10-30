@@ -64,6 +64,7 @@
       <canvas id="minimap" width="180" height="180"></canvas>
       <div class="map-btns">
         <button id="b-walk" title="Walk around (F)">🚶</button>
+        <button id="b-drive" title="Drive a car (C)">🚗</button>
         <button id="b-home" title="Back to city centre">🏠</button>
         <button id="b-settings" title="Budget & settings">⚙️</button>
       </div>
@@ -84,6 +85,9 @@
         <header><span>⚙️ Budget & policies</span><button class="mini" id="settings-close">✕</button></header>
         <label class="ctl"><span>Tax rate <em id="v-tax">10%</em></span><input type="range" id="tax" min="0" max="30" value="10" /></label>
         <p class="note">Higher taxes bring in more money but make citizens unhappy.</p>
+        <label class="ctl"><span>Graphics quality</span></label>
+        <div class="row" id="quality-row"><button class="btn" data-q="low">Low</button><button class="btn" data-q="high">High</button><button class="btn" data-q="ultra">Ultra</button></div>
+        <p class="note">Ultra adds ambient occlusion, 4K shadows and dense grass. Use Low on older computers.</p>
         <label class="toggle"><input type="checkbox" id="imports" checked /> <span>Import food & goods when we run short (costs money)</span></label>
         <div class="budget" id="budget"></div>
         <div class="row">
@@ -109,7 +113,7 @@
       </div>
       <label class="seed">Seed <input id="t-seed" type="text" inputmode="numeric" maxlength="9" /></label>
       <div class="keys">
-        <span>Drag: move</span><span>Right-drag / <kbd>Q</kbd><kbd>E</kbd>: rotate</span><span>Scroll: zoom</span><span><kbd>WASD</kbd> pan</span><span><kbd>F</kbd> walk</span><span><kbd>R</kbd> rotate building</span>
+        <span>Drag: move</span><span>Right-drag / <kbd>Q</kbd><kbd>E</kbd>: rotate</span><span>Scroll: zoom</span><span><kbd>WASD</kbd> pan</span><span><kbd>F</kbd> walk</span><span><kbd>C</kbd> drive</span><span><kbd>R</kbd> rotate building</span>
       </div>
       <a class="island-link" href="island.html">or play the small Island Lab →</a>
     </div>

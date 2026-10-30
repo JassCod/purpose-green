@@ -1,13 +1,18 @@
 import * as THREE from '../vendor/three.module.js';
 import { OrbitControls } from '../vendor/OrbitControls.js';
-import { Terrain, T, WATER, tkey, seasonUniforms, treeMaterial } from './terrain.js';
-import { makeBuildingMesh, windowMaterial, darkWindowMaterial, lightMaterial } from './models.js';
+import { Sky } from '../vendor/Sky.js';
+import { Terrain, T, WATER, METERS, tkey, seasonUniforms, addSnow, terrainTextures } from './terrain.js';
+import { loadAssets, getTemplate, Batch, templateGroup, shared } from './assets.js';
+import { Physics, variantSuffix } from './physics.js';
 import {
   G, DEFS, TOOLS, ALL_TOOLS, CATS, hooks, bindTerrain, canPlace, placeRoad, placeBuilding, plantTree, bulldoze,
   removeBuilding, advance, tileAt, isRoad, hourOfDay, day, season, serialize, restore, initialTick, pollutionAt, isAdult,
-  sunFactor, DAYS_PER_SEASON,
+  sunFactor, DAYS_PER_SEASON, roleOf, occupationOf,
 } from './sim.js';
 import { Agents } from './agents.js';
+import { Graphics, QUALITY } from './graphics.js';
+import { Grass } from './grass.js';
+import { N, bindNature, sunVector, moonVector, moonLight, moonPhase, treeGrowth, dayLength, LATITUDE } from './nature.js';
 
 const SAVE_KEY = 'purpose-green-world-v1';
 const NEW_SEED_KEY = 'purpose-green-new-seed';
@@ -26,6 +31,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.62;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xcfe9f7, 120, 300);
@@ -49,18 +56,30 @@ function setMouseMode(building) {
 }
 setMouseMode(false);
 
-/* ---------- sky ---------- */
-const skyU = { top: { value: new THREE.Color() }, bottom: { value: new THREE.Color() } };
-const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16), new THREE.ShaderMaterial({
-  side: THREE.BackSide, depthWrite: false, fog: false, uniforms: skyU,
-  vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `uniform vec3 top; uniform vec3 bottom; varying vec3 vP;
-    void main(){ float h = smoothstep(-0.05, 0.55, vP.y); gl_FragColor = vec4(mix(bottom, top, h), 1.0);
-    #include <colorspace_fragment>
-    }`,
-}));
-sky.renderOrder = -1;
+/* ---------- physically based sky (Rayleigh + Mie scattering) ---------- */
+const sky = new Sky();
+sky.scale.setScalar(1000);
+sky.material.uniforms.turbidity.value = 4;
+sky.material.uniforms.rayleigh.value = 1.6;
+sky.material.uniforms.mieCoefficient.value = 0.004;
+sky.material.uniforms.mieDirectionalG.value = 0.8;
+sky.material.fog = false;
 scene.add(sky);
+// the same sky lights the scene through image-based reflections
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envScene = new THREE.Scene();
+const envSky = new Sky();
+envSky.scale.setScalar(1000);
+envScene.add(envSky);
+let envRT = null, envTimer = 99;
+function refreshEnvironment() {
+  for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG']) envSky.material.uniforms[k].value = sky.material.uniforms[k].value;
+  envSky.material.uniforms.sunPosition.value.copy(sky.material.uniforms.sunPosition.value);
+  const old = envRT;
+  envRT = pmrem.fromScene(envScene, 0, 0.1, 2000);
+  scene.environment = envRT.texture;
+  if (old) old.dispose();
+}
 
 const starGeo = new THREE.BufferGeometry();
 {
@@ -104,10 +123,25 @@ scene.add(sun, sun.target);
 const moon = new THREE.DirectionalLight(0x9db4ff, 0.3);
 scene.add(moon, moon.target);
 
+/* ---------- quality: post-processing, shadows, grass density ---------- */
+const gfx = new Graphics(renderer, scene, camera, sun);
+let quality = 'high';
+try { quality = localStorage.getItem('purpose-green-quality') || 'high'; } catch { /* storage unavailable */ }
+let grass = null;
+const GRASS = { low: [0, 0], high: [22000, 12], ultra: [55000, 17] };
+function applyQuality(q) {
+  quality = q in QUALITY ? q : 'high';
+  gfx.setQuality(quality);
+  if (grass) grass.setBudget(...GRASS[quality]);
+  try { localStorage.setItem('purpose-green-quality', quality); } catch { /* storage unavailable */ }
+}
+
 /* ---------- water ---------- */
+const waterNormals = terrainTextures.tex('water_n.jpg', false);
+waterNormals.repeat.set(140, 140);
 const water = new THREE.Mesh(
   new THREE.PlaneGeometry(1400, 1400).rotateX(-Math.PI / 2),
-  new THREE.MeshStandardMaterial({ color: 0x3a9ed6, roughness: 0.12, metalness: 0.15, transparent: true, opacity: 0.84 }),
+  new THREE.MeshPhysicalMaterial({ color: 0x0f4a5c, roughness: 0.06, metalness: 0.0, transparent: true, opacity: 0.88, normalMap: waterNormals, normalScale: new THREE.Vector2(0.35, 0.35), clearcoat: 0.6, clearcoatRoughness: 0.1, envMapIntensity: 1.2 }),
 );
 water.position.y = WATER;
 water.receiveShadow = true;
@@ -116,39 +150,66 @@ scene.add(water);
 /* ================================================================== */
 /*  World                                                              */
 /* ================================================================== */
-let terrain = null, agents = null;
-const meshes = new Map(); // building id -> { group, icon, height }
+let terrain = null, agents = null, physics = null;
+const meshes = new Map(); // building id -> { icon, fence, height, matrix }
+
+/* Buildings render as instanced batches: one InstancedMesh per model primitive. */
+const batches = new Map(); // template name -> { main, lit, dark, rotor }
+function batchFor(name) {
+  if (!batches.has(name)) {
+    const t = getTemplate(name);
+    batches.set(name, {
+      main: new Batch(scene, t.prims, { filter: (p) => !p.window }),
+      lit: new Batch(scene, t.prims, { filter: (p) => p.window, override: shared.windowLit, shadows: false }),
+      dark: new Batch(scene, t.prims, { filter: (p) => p.window, override: shared.windowDark, shadows: false }),
+      rotor: t.rotor ? new Batch(scene, t.rotor.prims) : null,
+      t,
+    });
+  }
+  return batches.get(name);
+}
+const tplName = (b) => `${b.type}${variantSuffix(b)}`;
+const debrisMats = {};
+function debrisMaterial(name) {
+  if (!debrisMats[name]) {
+    const t = getTemplate(name);
+    const mats = t ? t.prims.filter((p) => p.material.map && !p.window && p.name !== 'Lawn' && p.name !== 'Leaves').map((p) => p.material) : [];
+    debrisMats[name] = mats.length ? mats : [new THREE.MeshStandardMaterial({ color: 0x9a948a, roughness: 0.9 })];
+  }
+  return debrisMats[name];
+}
 
 hooks.onAdd = (b) => {
   const d = DEFS[b.type];
-  const g = makeBuildingMesh(b.type, b.variant);
-  g.position.set((b.i + b.size / 2) * T, b.level, (b.j + b.size / 2) * T);
-  g.rotation.y = b.rot;
-  scene.add(g);
-  const box = new THREE.Box3().setFromObject(g);
-  const entry = { group: g, icon: null, height: box.max.y - b.level, bornAt: performance.now() };
+  const t = getTemplate(tplName(b));
+  const entry = { icon: null, fence: null, height: t.bbox.max.y, pos: new THREE.Vector3((b.i + b.size / 2) * T, b.level, (b.j + b.size / 2) * T) };
   if (b.progress < 1) {
-    const fence = new THREE.Mesh(new THREE.BoxGeometry(d.size * T * 0.92, 0.5, d.size * T * 0.92), scaffoldMat);
-    fence.position.set(g.position.x, b.level + 0.25, g.position.z);
+    const fence = new THREE.Mesh(new THREE.BoxGeometry(d.size * T * 0.94, 0.4, d.size * T * 0.94), scaffoldMat);
+    fence.position.set(entry.pos.x, b.level + 0.2, entry.pos.z);
     scene.add(fence);
     entry.fence = fence;
   }
   meshes.set(b.id, entry);
+  buildingsDirty = true;
+  if (physics) physics.invalidate();
 };
 hooks.onRemove = (b, reason) => {
   const e = meshes.get(b.id);
   if (!e) return;
-  scene.remove(e.group);
   if (e.icon) scene.remove(e.icon);
   if (e.fence) scene.remove(e.fence);
   meshes.delete(b.id);
-  const p = e.group.position;
+  buildingsDirty = true;
+  const p = e.pos;
   for (let k = 0; k < (reason === 'fire' ? 14 : 8); k++) puff(new THREE.Vector3(p.x + (Math.random() - 0.5) * b.size * T, p.y + 0.5, p.z + (Math.random() - 0.5) * b.size * T), reason === 'fire' ? 0x333333 : 0xbfae90, 2.2, 1.5);
+  // rubble tumbles down under gravity
+  if (physics && b.progress > 0.3) physics.debris(p.x, p.y + e.height * 0.4, p.z, b.size * T * 0.7, Math.round(10 + b.size * 8 + e.height * 2), debrisMaterial(tplName(b)));
   if (inspected?.kind === 'building' && inspected.id === b.id) closeInspector();
 };
+let buildingsDirty = true;
 hooks.onEvent = (text, kind) => feed(text, kind);
 hooks.onFire = (b, started) => { if (started) toast(`🔥 Fire! Click to see it.`, 'bad', () => flyTo(b.i * T, b.j * T)); };
-const scaffoldMat = new THREE.MeshBasicMaterial({ color: 0xffa53a, transparent: true, opacity: 0.35, depthWrite: false });
+const scaffoldMat = new THREE.MeshStandardMaterial({ color: 0xff8a1a, transparent: true, opacity: 0.55, roughness: 0.6, depthWrite: false });
 
 /* ---------- emoji problem icons ---------- */
 const iconMats = new Map();
@@ -279,8 +340,8 @@ function selectTool(t) {
   document.querySelectorAll('.tool').forEach((el) => el.classList.toggle('on', el.dataset.tool === t));
   if (ghost) { scene.remove(ghost); ghost = null; }
   if (DEFS[t] && t !== 'road') {
-    ghost = makeBuildingMesh(t, 0);
-    ghost.traverse((o) => { if (o.isMesh) { o.material = ghostOk; o.castShadow = false; } });
+    ghost = templateGroup(`${t}${variantSuffix({ type: t, variant: 0 })}`, ghostOk);
+    ghost.traverse((o) => { if (o.isMesh) o.castShadow = false; });
     ghost.visible = false;
     scene.add(ghost);
   }
@@ -357,7 +418,7 @@ function applyAt(h) {
     if (!chk.ok) { toast(chk.reason, 'bad'); return; }
     const b = placeBuilding(tool, i, j, rotManual ?? autoRot(tool, i, j));
     if (b) {
-      const p = meshes.get(b.id).group.position;
+      const p = meshes.get(b.id).pos;
       for (let k = 0; k < 6; k++) puff(new THREE.Vector3(p.x + (Math.random() - 0.5) * 2, p.y + 0.3, p.z + (Math.random() - 0.5) * 2), 0xd9c9a8, 1.3, 1.2, 0.6);
       if (!b.road && !findRoadAdj(b)) toast('Tip: connect it to a road so it can work', '');
     }
@@ -374,7 +435,13 @@ function applyLine(a, b) {
   for (const [i, j] of tiles) {
     if (tool === 'road') { if (!isRoad(i, j) && placeRoad(i, j)) n++; }
     else if (tool === 'tree') { if (plantTree(i, j)) n++; }
-    else if (tool === 'bulldoze') { if (bulldoze(i, j)) n++; }
+    else if (tool === 'bulldoze') {
+      const tr = terrain.treeAt(i, j);
+      const what = bulldoze(i, j);
+      if (what) n++;
+      // a cut tree topples over under gravity
+      if (what === 'tree' && tr && n < 12) { physics.refreshStatics(); physics.fellTree(tr); }
+    }
   }
   if (!n && tool === 'road') toast(canPlace('road', b.i, b.j).reason || 'Nothing to build', 'bad');
 }
@@ -433,7 +500,15 @@ window.addEventListener('keydown', (e) => {
   keys.add(k);
   if (!started) return;
   if (k === 'escape' && !walking) { if (tool !== 'inspect') selectTool('inspect'); else closeInspector(); }
-  if (walking) return;
+  if (walking) {
+    if (k === 'escape' && driving) exitFirstPerson();
+    if (k === 'c' && !driving) enterDrive();
+    if (k === 'f' && driving) { const x = walkPos.x, z = walkPos.z; exitFirstPerson(true); controls.target.set(x, 0, z); enterWalk(); }
+    if (k === 'r' && driving) physics.resetCar();
+    if (k === ' ') e.preventDefault();
+    return;
+  }
+  if (k === 'c') enterDrive();
   if (k === ' ') { e.preventDefault(); setSpeed(G.speed ? 0 : lastSpeed || 1); }
   if (k === 'r' && ghost) { rotManual = ((rotManual ?? ghost.rotation.y) + Math.PI / 2) % (Math.PI * 2); updatePreview(); }
   if (k === 'f') enterWalk();
@@ -447,41 +522,95 @@ window.addEventListener('blur', () => keys.clear());
 /* ================================================================== */
 /*  Walk mode                                                          */
 /* ================================================================== */
-let walking = false, yaw = 0, pitch = 0;
+let walking = false, driving = false, yaw = 0, pitch = 0;
 const walkPos = new THREE.Vector3();
-function enterWalk() {
-  if (!canvas.requestPointerLock || matchMedia('(pointer: coarse)').matches) { toast('Walk mode needs a mouse and keyboard', 'bad'); return; }
+const walkFocus = () => walkPos;
+const chase = new THREE.Vector3();
+
+function startFirstPerson(x, z) {
   walking = true;
-  walkPos.copy(controls.target);
-  const off = camera.position.clone().sub(controls.target);
-  yaw = Math.atan2(-off.x, -off.z);
-  pitch = -0.08;
-  // start a few steps back so the city is in front of you
-  walkPos.x -= Math.sin(yaw) * 14;
-  walkPos.z -= Math.cos(yaw) * 14;
+  walkPos.set(x, Math.max(WATER, terrain.surfaceH(x, z)), z);
   controls.enabled = false;
   $('hud').classList.add('walking');
   $('walk-hint').classList.remove('hidden');
   hover = null; updatePreview();
+}
+
+/** On foot: a physics body with mass, gravity, jumping, swimming and collisions. */
+function enterWalk() {
+  if (!canvas.requestPointerLock || matchMedia('(pointer: coarse)').matches) { toast('Walk mode needs a mouse and keyboard', 'bad'); return; }
+  if (driving) exitFirstPerson(true);
+  const off = camera.position.clone().sub(controls.target);
+  yaw = Math.atan2(-off.x, -off.z);
+  pitch = -0.05;
+  // start on the nearest sidewalk (or a few steps back if there are no roads)
+  let x = controls.target.x - Math.sin(yaw) * 6, z = controls.target.z - Math.cos(yaw) * 6;
+  const ti = Math.floor(controls.target.x / T), tj = Math.floor(controls.target.z / T);
+  let bd = Infinity;
+  for (let a = -20; a <= 20; a++) for (let b = -20; b <= 20; b++) {
+    if (!isRoad(ti + a, tj + b) || a * a + b * b >= bd) continue;
+    bd = a * a + b * b;
+    x = (ti + a + 0.5) * T + (isRoad(ti + a, tj + b + 1) ? 0.82 : 0);
+    z = (tj + b + 0.5) * T + (isRoad(ti + a, tj + b + 1) ? 0 : 0.82);
+  }
+  startFirstPerson(x, z);
+  physics.spawnPlayer(x, z);
+  $('walk-hint').innerHTML = '🚶 On foot · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · <kbd>Space</kbd> jump · <b>Click</b> throw a ball · <kbd>C</kbd> drive · <kbd>Esc</kbd> map';
   canvas.requestPointerLock();
 }
-function exitWalk() {
+
+/** Behind the wheel: a raycast-suspension vehicle on the real terrain. */
+function enterDrive() {
+  if (matchMedia('(pointer: coarse)').matches) { toast('Driving needs a keyboard', 'bad'); return; }
+  let best = null, bd = Infinity;
+  const ti = Math.floor((walking ? walkPos.x : controls.target.x) / T), tj = Math.floor((walking ? walkPos.z : controls.target.z) / T);
+  for (let a = -30; a <= 30; a++) for (let b = -30; b <= 30; b++) {
+    if (!isRoad(ti + a, tj + b)) continue;
+    const d = a * a + b * b;
+    if (d < bd) { bd = d; best = [ti + a, tj + b]; }
+  }
+  const x = best ? (best[0] + 0.5) * T : walking ? walkPos.x : controls.target.x;
+  const z = best ? (best[1] + 0.5) * T : walking ? walkPos.z : controls.target.z;
+  let heading = yaw;
+  if (best) heading = isRoad(best[0] + 1, best[1]) || isRoad(best[0] - 1, best[1]) ? Math.PI / 2 : 0;
+  if (walking) exitFirstPerson(true);
+  if (document.pointerLockElement) document.exitPointerLock();
+  startFirstPerson(x, z);
+  driving = true;
+  yaw = heading;
+  physics.spawnCar(x, z, heading);
+  chase.set(x - Math.sin(heading) * 2, walkPos.y + 1, z - Math.cos(heading) * 2);
+  $('walk-hint').innerHTML = '🚗 <b id="speedo">0 km/h</b> · <kbd>W</kbd> gas · <kbd>S</kbd> brake/reverse · <kbd>A</kbd><kbd>D</kbd> steer · <kbd>Space</kbd> handbrake · <kbd>R</kbd> flip back · <kbd>F</kbd> get out · <kbd>Esc</kbd> map';
+}
+
+function exitFirstPerson(silent = false) {
   if (!walking) return;
   walking = false;
+  driving = false;
+  physics.removePlayer();
+  physics.removeCar();
   controls.enabled = true;
   $('hud').classList.remove('walking');
   $('walk-hint').classList.add('hidden');
+  if (silent) return;
   const ground = Math.max(WATER, terrain.surfaceH(walkPos.x, walkPos.z));
   controls.target.set(walkPos.x, ground, walkPos.z);
   camera.position.set(walkPos.x - Math.sin(yaw) * 30, ground + 28, walkPos.z - Math.cos(yaw) * 30);
 }
-document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) exitWalk(); });
+const exitWalk = () => exitFirstPerson();
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas && walking && !driving) exitFirstPerson(); });
 document.addEventListener('mousemove', (e) => {
-  if (!walking || document.pointerLockElement !== canvas) return;
+  if (!walking || driving || document.pointerLockElement !== canvas) return;
   yaw -= e.movementX * 0.0022;
   pitch = clamp(pitch - e.movementY * 0.0022, -1.4, 1.4);
 });
+canvas.addEventListener('mousedown', (e) => {
+  if (!walking || driving || document.pointerLockElement !== canvas || e.button !== 0) return;
+  const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  physics.throwBall(camera.position.clone().addScaledVector(dir, 0.12), dir);
+});
 $('b-walk').addEventListener('click', enterWalk);
+$('b-drive').addEventListener('click', enterDrive);
 
 /* ================================================================== */
 /*  Camera helpers                                                     */
@@ -495,16 +624,44 @@ $('b-home').addEventListener('click', () => {
 });
 
 function updateCamera(dt) {
-  if (walking) {
-    const speed = (keys.has('shift') ? 14 : 5) * dt;
-    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-    if (keys.has('w') || keys.has('arrowup')) walkPos.addScaledVector(fwd, speed);
-    if (keys.has('s') || keys.has('arrowdown')) walkPos.addScaledVector(fwd, -speed);
-    if (keys.has('a') || keys.has('arrowleft')) walkPos.addScaledVector(right, -speed);
-    if (keys.has('d') || keys.has('arrowright')) walkPos.addScaledVector(right, speed);
-    const ground = Math.max(WATER + 0.4, terrain.surfaceH(walkPos.x, walkPos.z));
-    camera.position.set(walkPos.x, ground + 1.7, walkPos.z);
-    camera.lookAt(walkPos.x + Math.sin(yaw) * Math.cos(pitch), ground + 1.7 + Math.sin(pitch), walkPos.z + Math.cos(yaw) * Math.cos(pitch));
+  const near = walking ? 0.02 : 0.3;
+  if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
+  if (walking && driving && physics.car) {
+    const input = {
+      throttle: (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0),
+      steer: (keys.has('a') || keys.has('arrowleft') ? 1 : 0) - (keys.has('d') || keys.has('arrowright') ? 1 : 0),
+      handbrake: keys.has(' '),
+    };
+    physics.driveCar(input, dt);
+    const { pos, quat } = physics.carPose();
+    walkPos.copy(pos);
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(quat).setY(0).normalize();
+    yaw = Math.atan2(fwd.x, fwd.z);
+    const want = pos.clone().addScaledVector(fwd, -1.6).add(new THREE.Vector3(0, 0.62, 0));
+    const ground = Math.max(WATER, terrain.surfaceH(want.x, want.z)) + 0.15;
+    if (want.y < ground) want.y = ground;
+    chase.lerp(want, Math.min(1, dt * 5));
+    camera.position.copy(chase);
+    camera.lookAt(pos.x + fwd.x * 0.8, pos.y + 0.32, pos.z + fwd.z * 0.8);
+    const sp = $('speedo');
+    if (sp) sp.textContent = `${Math.round(Math.abs(physics.carForwardSpeed()))} km/h`;
+    return;
+  }
+  if (walking && physics.player) {
+    const input = {
+      fwd: (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0),
+      right: (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0),
+      run: keys.has('shift'),
+      jump: keys.has(' '),
+    };
+    physics.drivePlayer(input, yaw, dt);
+    const eye = physics.playerEye();
+    walkPos.set(eye.x, eye.y, eye.z);
+    // a little head bob while walking on the ground
+    const moving = Math.hypot(physics.player.body.velocity.x, physics.player.body.velocity.z);
+    const bob = physics.player.grounded ? Math.sin(performance.now() / (input.run ? 110 : 180)) * 0.008 * Math.min(1, moving) : 0;
+    camera.position.set(eye.x, eye.y + bob, eye.z);
+    camera.lookAt(eye.x + Math.sin(yaw) * Math.cos(pitch), eye.y + bob + Math.sin(pitch), eye.z + Math.cos(yaw) * Math.cos(pitch));
     return;
   }
   const t = controls.target;
@@ -556,80 +713,128 @@ let following = null;
 /* ================================================================== */
 /*  Environment (sky, light, weather, seasons)                         */
 /* ================================================================== */
-const SKY = [
-  [0, 0x08122b, 0x18264a], [5, 0x141f45, 0x34396a], [6, 0x5a6fb0, 0xffa987], [7.5, 0x79c2ee, 0xffe1bd],
-  [12, 0x4aa9ea, 0xd6efff], [17, 0x6aaee4, 0xffd7a3], [18.8, 0x474c8c, 0xff8c66], [20, 0x172350, 0x37335f], [24, 0x08122b, 0x18264a],
+const SKY = [ // horizon / fog colours through the day
+  [0, 0x0b1424], [5, 0x1b2236], [6, 0xd9a07c], [7.5, 0xcdd9e2], [12, 0xc4d9e8], [17, 0xd9d2c4], [18.8, 0xd08a62], [20, 0x2a2b40], [24, 0x0b1424],
 ];
-const cA = new THREE.Color(), cB = new THREE.Color(), cC = new THREE.Color(), gray = new THREE.Color(0x6b7684), haze = new THREE.Color(0xa59a7d);
-const TREE_TINT = { Spring: new THREE.Color(1.05, 1.08, 1.0), Summer: new THREE.Color(1, 1, 1), Autumn: new THREE.Color(1.55, 0.92, 0.45), Winter: new THREE.Color(0.85, 0.9, 0.95) };
-let gloom = 0, wet = 0, flash = 0, snowCover = 0;
+const cA = new THREE.Color(), cC = new THREE.Color(), gray = new THREE.Color(0x8a939c), haze = new THREE.Color(0xa59a7d);
+const LEAF_TINT = { Spring: new THREE.Color(1.0, 1.08, 0.95), Summer: new THREE.Color(1, 1, 1), Autumn: new THREE.Color(1.7, 0.95, 0.4), Winter: new THREE.Color(0.75, 0.7, 0.55) };
+let gloom = 0, wet = 0, flash = 0, snowCover = 0, lastSunKey = '';
+const sunDir = new THREE.Vector3(), tmpSun = new THREE.Vector3(), moonDir = new THREE.Vector3();
 
 function updateEnvironment(dt) {
   const h = hourOfDay();
   const ang = ((h - 6) / 12) * Math.PI;
-  const sunH = Math.sin(ang);
+  const sunH = sunVector(G.t, tmpSun).y;
   const dayK = clamp(sunH * 3 + 0.3, 0, 1);
   const kind = G.weather.kind;
-  gloom = lerp(gloom, kind === 'storm' ? 1 : kind === 'rain' || kind === 'snow' ? 0.6 : kind === 'cloudy' ? 0.35 : 0, dt * 0.6);
+  gloom = lerp(gloom, kind === 'storm' ? 1 : kind === 'rain' || kind === 'snow' ? 0.65 : kind === 'cloudy' ? 0.4 : 0, dt * 0.6);
   wet = lerp(wet, kind === 'rain' || kind === 'storm' ? 1 : 0, dt * 0.8);
 
+  // real solar position for this latitude and day of the year
+  sunVector(G.t, sunDir);
+  const su = sky.material.uniforms;
+  su.sunPosition.value.copy(sunDir);
+  su.turbidity.value = lerp(3.2, 14, gloom);
+  su.rayleigh.value = lerp(1.4, 0.6, gloom);
+  su.mieCoefficient.value = lerp(0.004, 0.02, gloom);
+  renderer.toneMappingExposure = lerp(0.62, 0.42, gloom) * lerp(0.85, 1, dayK);
+
   for (let k = 0; k < SKY.length - 1; k++) {
-    const [h0, t0, b0] = SKY[k], [h1, t1, b1] = SKY[k + 1];
-    if (h >= h0 && h <= h1) { const f = (h - h0) / (h1 - h0); cA.set(t0).lerp(cC.set(t1), f); cB.set(b0).lerp(cC.set(b1), f); break; }
+    const [h0, c0] = SKY[k], [h1, c1] = SKY[k + 1];
+    if (h >= h0 && h <= h1) { cA.set(c0).lerp(cC.set(c1), (h - h0) / (h1 - h0)); break; }
   }
   let poll = 0;
   if (terrain) poll = clamp(pollutionAt(Math.floor(controls.target.x / T), Math.floor(controls.target.z / T)) / 14, 0, 1);
-  cA.lerp(gray, gloom * 0.65 * dayK).lerp(haze, poll * 0.4 * dayK);
-  cB.lerp(gray, gloom * 0.55 * dayK).lerp(haze, poll * 0.5 * dayK);
-  skyU.top.value.copy(cA);
-  skyU.bottom.value.copy(cB);
-  scene.fog.color.copy(cB);
+  cA.lerp(gray, gloom * 0.6 * dayK).lerp(haze, poll * 0.45 * dayK);
+  scene.fog.color.copy(cA);
 
-  const t = controls.target;
-  const sd = new THREE.Vector3(-Math.cos(ang) * 0.8, Math.max(0.08, sunH), 0.45).normalize();
-  sun.position.copy(t).addScaledVector(sd, 160);
+  // refresh image-based lighting when the sun or weather changes noticeably
+  envTimer += dt;
+  const sunKey = `${Math.round(h * 2)}:${kind}`;
+  if (envTimer > 2 && sunKey !== lastSunKey) { envTimer = 0; lastSunKey = sunKey; refreshEnvironment(); }
+
+  const t = walking ? walkFocus() : controls.target;
+  sun.position.copy(t).addScaledVector(sunDir.y > 0.05 ? sunDir : sunDir.clone().setY(0.05).normalize(), 160);
   sun.target.position.copy(t);
-  sun.intensity = 2.6 * clamp(sunH * 2.5, 0, 1) * (1 - gloom * 0.65);
-  sun.color.setHSL(0.09, 0.8, lerp(0.62, 0.93, clamp(sunH * 2, 0, 1)));
-  moon.position.copy(t).add(new THREE.Vector3(Math.cos(ang) * 100, Math.max(20, -sunH * 140), -40));
+  sun.intensity = 3.2 * clamp(sunH * 2.5, 0, 1) * (1 - gloom * 0.75);
+  sun.color.setHSL(0.08, 0.85, lerp(0.6, 0.94, clamp(sunH * 2, 0, 1)));
+  // the moon follows its own orbit; its light depends on the phase
+  moonVector(G.t, moonDir);
+  moon.position.copy(t).addScaledVector(moonDir.y > 0.05 ? moonDir : moonDir.clone().setY(0.2).normalize(), 140);
   moon.target.position.copy(t);
-  moon.intensity = 0.5 * (1 - dayK);
-  hemi.intensity = lerp(0.3, 1.35, dayK) * (1 - gloom * 0.35) + flash;
+  moon.intensity = 0.45 * (1 - dayK) * moonLight(G.t) * clamp(moonDir.y * 4, 0, 1);
+  hemi.intensity = lerp(0.12, 0.55, dayK) * (1 - gloom * 0.3) + flash;
+  scene.environmentIntensity = lerp(0.25, 1, dayK);
   flash = Math.max(0, flash - dt * 6);
-  if (kind === 'storm' && Math.random() < dt * 0.25) flash = 2.5;
+  if (kind === 'storm' && Math.random() < dt * 0.25) flash = 3;
 
   const cp = camera.position;
   sky.position.copy(cp); stars.position.copy(cp);
-  sunSprite.position.set(cp.x - Math.cos(ang) * 600, cp.y + sunH * 500, cp.z + 300);
-  moonSprite.position.set(cp.x + Math.cos(ang) * 600, cp.y - sunH * 500, cp.z + 300);
-  sunSprite.material.opacity = (1 - gloom) * clamp(sunH * 4 + 0.3, 0, 1);
-  moonSprite.material.opacity = (1 - gloom) * clamp(-sunH * 4 + 0.3, 0, 1);
+  moonSprite.position.copy(cp).addScaledVector(moonDir, 600);
+  moonSprite.scale.setScalar(30 + 40 * moonLight(G.t));
+  moonSprite.material.opacity = (1 - gloom) * clamp(moonDir.y * 5, 0, 1) * (0.25 + 0.75 * moonLight(G.t)) * clamp(1 - dayK * 1.4, 0.15, 1);
+  sunSprite.visible = false;
   stars.material.opacity = (1 - dayK) * (1 - gloom * 0.9);
 
-  const lit = 1 - dayK * 0.85;
-  windowMaterial.emissiveIntensity = lit * 1.4;
-  lightMaterial.emissiveIntensity = (1 - dayK) * 3 * (Math.sin(performance.now() / 300) > 0.4 ? 1 : 0.1);
+  // lights come on at dusk
+  const night = 1 - dayK;
+  shared.windowLit.emissiveIntensity = 0.05 + night * 0.9;
+  shared.lamp.emissiveIntensity = night > 0.3 ? 3 : 0;
+  shared.headlight.emissiveIntensity = 0.3 + night * 4;
+  shared.taillight.emissiveIntensity = 0.5 + night * 2;
+  const blink = Math.sin(performance.now() / 160) > 0;
+  shared.sirenRed.emissiveIntensity = blink ? 4 : 0.2;
+  shared.sirenBlue.emissiveIntensity = blink ? 0.2 : 4;
 
-  // seasons
+  // seasons: snow cover, autumn colours, bare deciduous trees in winter
   const se = season();
-  const winterSnow = se.name === 'Winter' ? (kind === 'snow' ? 1 : 0.75) : 0;
-  snowCover = lerp(snowCover, winterSnow, dt * 0.3);
+  snowCover = lerp(snowCover, se.name === 'Winter' ? (kind === 'snow' ? 1 : 0.8) : 0, dt * 0.3);
   seasonUniforms.uSnow.value = snowCover;
-  treeMaterial.color.lerp(TREE_TINT[se.name], dt * 0.3);
+  const leaves = getTemplate('oak_0').prims.find((p) => p.name === 'Leaves')?.material;
+  if (leaves) {
+    leaves.color.lerp(LEAF_TINT[se.name], dt * 0.3);
+    leaves.alphaTest = lerp(leaves.alphaTest, se.name === 'Winter' ? 0.93 : se.name === 'Autumn' ? 0.6 : 0.5, dt * 0.3);
+  }
 
   // fog depends on zoom and weather
-  const dist = walking ? 20 : cp.distanceTo(t);
-  scene.fog.near = (dist * 0.7 + 40) * (1 - gloom * 0.45);
-  scene.fog.far = (dist + 170) * (1 - gloom * 0.3);
+  const dist = walking ? 25 : cp.distanceTo(controls.target);
+  scene.fog.near = (dist * 0.6 + 30) * (1 - gloom * 0.5);
+  scene.fog.far = (dist + 150) * (1 - gloom * 0.35);
   water.position.x = Math.round(t.x / 50) * 50;
   water.position.z = Math.round(t.z / 50) * 50;
-  water.material.color.setHSL(0.56, 0.6, lerp(0.15, 0.48, dayK) * (1 - gloom * 0.3));
+  waterNormals.offset.x += dt * 0.004 * (0.5 + G.weather.wind);
+  waterNormals.offset.y += dt * 0.0025;
+  water.material.normalScale.setScalar((0.25 + G.weather.wind * 0.5) * (1 - N.ice));
+  // lakes freeze in sustained frost
+  water.material.color.setRGB(lerp(0.06, 0.82, N.ice), lerp(0.29, 0.88, N.ice), lerp(0.36, 0.94, N.ice));
+  water.material.roughness = lerp(0.06, 0.35, N.ice);
+  water.material.opacity = lerp(0.88, 1, N.ice);
 
-  // precipitation follows the camera target
-  const raining = (kind === 'rain' || kind === 'storm') && !walking ? 1 : walking && (kind === 'rain' || kind === 'storm') ? 1 : 0;
-  rain.visible = raining > 0;
+  // clouds, bloom and grass respond to weather
+  const coverK = { sun: 0.25, cloudy: 0.75, rain: 0.95, storm: 1, snow: 0.9 }[kind];
+  gfx.clouds.update(dt, camera.position, { cover: coverK, wind: G.weather.wind, windDir: N.windDir, light: cA.clone().lerp(new THREE.Color(1, 1, 1), dayK * 0.7).multiplyScalar(lerp(0.25, 1, dayK)), gloom });
+  gfx.update(dt, { night: 1 - dayK });
+  N.focus = [Math.floor(t.x / T), Math.floor(t.z / T)];
+  const camDist = walking ? 0 : cp.distanceTo(controls.target);
+  grass.update(dt, t, { wind: G.weather.wind, windDir: N.windDir, dryness: clamp((N.dryness - 0.3) * 1.4, 0, 0.8), snow: clamp(snowCover * 1.3 - 0.2, 0, 1), visible: walking || camDist < 40 });
+
+  // wildfires: flames and smoke on burning forest tiles near the viewer
+  if (N.burning.size && G.speed) {
+    for (const k of N.burning.keys()) {
+      if (Math.random() > dt * 6) continue;
+      const [bi, bj] = k.split(',').map(Number);
+      const fx = (bi + 0.5) * T, fz = (bj + 0.5) * T;
+      if (Math.abs(fx - t.x) > 150 || Math.abs(fz - t.z) > 150) continue;
+      const gy = terrain.surfaceH(fx, fz);
+      puff(new THREE.Vector3(fx + (Math.random() - 0.5) * 1.6, gy + 0.6 + Math.random(), fz + (Math.random() - 0.5) * 1.6), Math.random() < 0.6 ? 0xff6a10 : 0xffc23d, 1.3, 0.9, 3.5);
+      if (Math.random() < 0.35) puff(new THREE.Vector3(fx, gy + 2.5, fz), 0x2b2b2b, 3, 6, 1.4);
+    }
+  }
+
+  // precipitation follows the viewer
+  rain.visible = kind === 'rain' || kind === 'storm';
   snow.visible = kind === 'snow';
-  const base = walking ? walkPos : t;
+  const base = t;
   if (rain.visible) {
     rain.position.set(base.x, base.y, base.z);
     const a = rainGeo.attributes.position.array, fall = dt * (kind === 'storm' ? 55 : 38), slant = G.weather.wind * dt * 10;
@@ -656,47 +861,66 @@ function updateEnvironment(dt) {
 /* ================================================================== */
 /*  Per-frame building visuals                                         */
 /* ================================================================== */
-let visTimer = 0;
-const tmpV = new THREE.Vector3();
-function updateBuildings(dt, gameDt) {
+let visTimer = 0, iconTimer = 0;
+const tmpV = new THREE.Vector3(), tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), rotM = new THREE.Matrix4();
+const UP = new THREE.Vector3(0, 1, 0);
+function buildingMatrix(b, e) {
+  const k = b.progress;
+  tmpQ.setFromAxisAngle(UP, b.rot);
+  // construction: the building rises out of its foundations
+  tmpS.set(1, k < 1 ? 0.06 + 0.94 * (1 - Math.pow(1 - k, 3)) : 1, 1);
+  return (e.matrix || (e.matrix = new THREE.Matrix4())).compose(e.pos, tmpQ, tmpS);
+}
+function updateBuildings(dt) {
   visTimer += dt;
-  const slow = visTimer > 0.4;
-  if (slow) visTimer = 0;
-  const cam = controls.target;
+  iconTimer += dt;
+  const rebuild = buildingsDirty || visTimer > 0.3;
+  const icons = iconTimer > 0.4;
+  if (icons) iconTimer = 0;
+  const cam = walking ? walkFocus() : controls.target;
+  if (rebuild) { visTimer = 0; buildingsDirty = false; for (const bt of batches.values()) { bt.main.begin(); bt.lit.begin(); bt.dark.begin(); } }
+  for (const bt of batches.values()) if (bt.rotor) bt.rotor.begin();
   for (const b of G.buildings.values()) {
     const e = meshes.get(b.id);
     if (!e) continue;
-    const g = e.group;
-    const near = Math.abs(g.position.x - cam.x) < 260 && Math.abs(g.position.z - cam.z) < 260;
-    g.visible = near;
+    const near = Math.abs(e.pos.x - cam.x) < 320 && Math.abs(e.pos.z - cam.z) < 320;
     if (!near) { if (e.icon) e.icon.visible = false; continue; }
-    // construction grows the building out of the ground
-    const k = b.progress;
-    g.scale.set(1, k < 1 ? 0.08 + 0.92 * (1 - Math.pow(1 - k, 3)) : 1, 1);
-    if (e.fence && k >= 1) { scene.remove(e.fence); e.fence = null; }
-    if (g.userData.rotor) g.userData.rotor.rotation.z -= dt * (b.working ? 0.5 + G.weather.wind * 6 : 0.1) * Math.min(3, Math.max(G.speed, 0.2));
-    if (slow) {
-      if (g.userData.windows) g.userData.windows.material = b.powered && b.progress >= 1 ? windowMaterial : darkWindowMaterial;
+    const bt = batchFor(tplName(b));
+    const m = buildingMatrix(b, e);
+    if (rebuild) {
+      bt.main.add(m, b.id);
+      (b.powered && b.progress >= 1 ? bt.lit : bt.dark).add(m, b.id);
+    }
+    if (bt.rotor) {
+      // blade speed follows the wind; feathered when not producing
+      e.spin = (e.spin || 0) + dt * (b.working ? 0.25 + G.weather.wind * 1.6 : 0.03) * Math.min(3, Math.max(G.speed, 0.3));
+      rotM.makeRotationZ(e.spin);
+      tmpM.multiplyMatrices(m, bt.t.rotor.matrix).multiply(rotM);
+      bt.rotor.add(tmpM, b.id);
+    }
+    if (e.fence && b.progress >= 1) { scene.remove(e.fence); e.fence = null; }
+    if (icons) {
       const issue = b.issues[0];
       if (issue) {
-        if (!e.icon) { e.icon = new THREE.Sprite(iconMat(issue)); e.icon.scale.setScalar(1.5); e.icon.renderOrder = 20; scene.add(e.icon); }
+        if (!e.icon) { e.icon = new THREE.Sprite(iconMat(issue)); e.icon.scale.setScalar(0.9); e.icon.renderOrder = 20; scene.add(e.icon); }
         e.icon.material = iconMat(issue);
-        e.icon.visible = true;
+        e.icon.visible = !walking;
       } else if (e.icon) e.icon.visible = false;
     }
-    if (e.icon && e.icon.visible) e.icon.position.set(g.position.x, b.level + e.height * g.scale.y + 1 + Math.sin(performance.now() / 300 + b.id) * 0.15, g.position.z);
-    // smoke & fire
+    if (e.icon && e.icon.visible) e.icon.position.set(e.pos.x, b.level + e.height * tmpS.y + 1 + Math.sin(performance.now() / 300 + b.id) * 0.15, e.pos.z);
     if (!G.speed) continue;
-    const chim = g.userData.chimneys;
-    if (chim.length && b.working && Math.random() < dt * 3 * Math.min(G.speed, 3)) {
-      for (const c of chim) puff(g.localToWorld(tmpV.copy(c)), b.type === 'coal' ? 0x8c8c8c : 0xa7a7a7, 1.2, 5, 1.4);
+    const em = bt.t.emitters;
+    if (em.length && b.working && Math.random() < dt * 3 * Math.min(G.speed, 3)) {
+      for (const p of em) puff(tmpV.copy(p.pos).applyMatrix4(m), p.kind === 'steam' ? 0xf2f2f2 : 0x8a8a8a, p.kind === 'steam' ? 2.6 : 1.3, 6, p.kind === 'steam' ? 1.0 : 1.5);
     }
     if (b.fire && Math.random() < dt * 14) {
-      const p = g.position;
+      const p = e.pos;
       puff(new THREE.Vector3(p.x + (Math.random() - 0.5) * b.size * 1.6, p.y + e.height * 0.6, p.z + (Math.random() - 0.5) * b.size * 1.6), Math.random() < 0.5 ? 0xff7a1a : 0xffc23d, 1.1, 0.8, 3);
       if (Math.random() < 0.4) puff(new THREE.Vector3(p.x, p.y + e.height + 0.5, p.z), 0x333333, 2, 4, 1.6);
     }
   }
+  if (rebuild) for (const bt of batches.values()) { bt.main.end(); bt.lit.end(); bt.dark.end(); }
+  for (const bt of batches.values()) if (bt.rotor) bt.rotor.end();
   for (let n = puffs.length - 1; n >= 0; n--) {
     const p = puffs[n];
     p.life += dt;
@@ -788,9 +1012,9 @@ function renderHUD() {
   const h = hourOfDay();
   $('s-time').textContent = `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`;
   const se = season();
-  $('s-date').textContent = `Day ${day()} · ${se.icon} ${se.name} · day ${((day() - 1) % DAYS_PER_SEASON) + 1}/${DAYS_PER_SEASON}`;
+  $('s-date').textContent = `Day ${day()} · ${se.icon} ${se.name} · ${Math.round(N.temp)} °C`;
   $('s-weather').textContent = wxIcon();
-  $('s-weather').title = `${G.weather.kind} · wind ${Math.round(G.weather.wind * 60)} km/h`;
+  $('s-weather').title = `${G.weather.kind} · ${N.temp.toFixed(1)} °C · wind ${Math.round(N.windSpeed * 3.6)} km/h · daylight ${dayLength(G.t).toFixed(1)} h · moon ${['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'][Math.floor(moonPhase(G.t) * 8) % 8]} · groundwater ${Math.round(N.groundwater * 100)}%`;
   const bar = (el, v) => { el.style.left = v >= 0 ? '50%' : `${50 + v * 50}%`; el.style.width = `${Math.abs(v) * 50}%`; el.style.background = v >= 0 ? '#2fbf71' : '#e0434f'; };
   bar($('d-r'), s.demR); bar($('d-c'), s.demC); bar($('d-i'), s.demI);
   const alerts = G.alerts.slice(0, 8);
@@ -826,15 +1050,20 @@ function inspectAt(cx, cy, h) {
   raycaster.setFromCamera(ndc, camera);
   const a = agents.pick(raycaster);
   if (a && a.cid != null) { inspected = { kind: 'citizen', id: a.cid, agent: a }; renderInspector(); return; }
-  if (a && a.kind === 'truck') { inspected = { kind: 'truck' }; renderInspector(); return; }
-  // buildings: ray against meshes first so tall buildings are easy to click
-  const groups = [...meshes.entries()].filter(([, e]) => e.group.visible);
-  const hit = raycaster.intersectObjects(groups.map(([, e]) => e.group), true)[0];
-  if (hit) {
-    let o = hit.object; while (o.parent && o.parent.type !== 'Scene') o = o.parent;
-    const entry = groups.find(([, e]) => e.group === o);
-    if (entry) { inspected = { kind: 'building', id: entry[0] }; renderInspector(); return; }
+  if (a && a.model) { inspected = { kind: 'vehicle', agent: a }; renderInspector(); return; }
+  // buildings: ray against the instanced models first so tall buildings are easy to click
+  let best = null;
+  for (const bt of batches.values()) {
+    for (const batch of [bt.main, bt.lit, bt.dark]) {
+      for (const m of batch.meshes) {
+        if (!m.count) continue;
+        m.computeBoundingSphere();
+        const hit = raycaster.intersectObject(m, false)[0];
+        if (hit && (!best || hit.distance < best.distance)) best = { distance: hit.distance, id: batch.ids[hit.instanceId] };
+      }
+    }
   }
+  if (best && G.buildings.has(best.id)) { inspected = { kind: 'building', id: best.id }; renderInspector(); return; }
   if (!h) { closeInspector(); return; }
   const t = tileAt(h.i, h.j);
   if (t?.b) inspected = { kind: 'building', id: t.b };
@@ -846,7 +1075,7 @@ const pct = (v) => `${Math.round(v)}%`;
 const meter = (v, color) => `<div class="meter"><i style="width:${clamp(v, 0, 100)}%;background:${color || (v > 60 ? '#2fbf71' : v > 35 ? '#f0a92a' : '#e0434f')}"></i></div>`;
 function personRow(c) {
   const job = c.job != null ? G.buildings.get(c.job) : null;
-  const role = c.age < 6 ? 'Toddler' : c.age < 18 ? 'Student' : c.age >= 66 ? 'Retired' : job ? DEFS[job.type].name : 'Unemployed';
+  const role = roleOf(c);
   const face = c.sick ? '🤒' : c.happy > 70 ? '😄' : c.happy > 50 ? '🙂' : c.happy > 30 ? '😐' : '😟';
   return `<div class="person" data-cid="${c.id}"><span>${face}</span><div><b>${c.name}</b><small>${Math.floor(c.age)} · ${role}</small></div><small>${Math.round(c.happy)}%</small></div>`;
 }
@@ -879,18 +1108,26 @@ function renderInspector() {
     const c = G.citizens.get(inspected.id);
     if (!c) { closeInspector(); return; }
     const home = G.buildings.get(c.home), job = c.job != null ? G.buildings.get(c.job) : null;
-    const stage = c.age < 6 ? 'Toddler' : c.age < 18 ? 'Student' : c.age >= 66 ? 'Retired' : 'Adult';
+    const stage = `${roleOf(c)}${c.female ? ' · she/her' : ''}`;
+    const occ = occupationOf(c);
     html = `<header><h3>${c.sick ? '🤒' : '🧑'} ${c.name}</h3><button class="mini" data-act="close">✕</button></header>
       <div class="sub">${stage}, ${Math.floor(c.age)} years old · lived here since day ${c.born}</div>
       <div class="kv"><span>Home</span><b>${home ? DEFS[home.type].name : 'None'}</b>
-      <span>Work</span><b>${job ? DEFS[job.type].name + (job.working ? '' : ' (closed)') : c.age < 18 ? 'School' : c.age >= 66 ? 'Retired' : '<b class="bad">Looking for work</b>'}</b>
-      <span>Education</span><b>${c.edu >= 10 ? '🎓 Educated' : `${c.edu}/12 years`}</b></div>
+      <span>Occupation</span><b>${occ ? occ.name : roleOf(c)}</b>
+      <span>Workplace</span><b>${job ? DEFS[job.type].name + (job.working ? '' : ' (closed)') : c.age < 18 ? 'School' : c.age >= 66 ? '—' : '<b class="bad">Looking for work</b>'}</b>
+      ${job ? `<span>Daily wage</span><b>$${Math.round(DEFS[job.type].wage * 2.5)}</b>` : ''}
+      <span>Education</span><b>${c.edu >= 16 ? '🎓 University degree' : c.edu >= 12 ? '📘 High school' : `${c.edu} years`}</b></div>
       <div class="kv"><span>Happiness ${pct(c.happy)}</span><span></span></div>${meter(c.happy)}
       <div class="kv" style="margin-top:8px"><span>Health ${pct(c.health)}</span><span></span></div>${meter(c.health)}
       <div class="sub" style="margin-top:10px">What they need</div><div class="tags">${citizenNeeds(c).join('')}</div>
       <div class="ibtns">${home ? `<button class="btn" data-act="goto" data-x="${home.i}" data-z="${home.j}">🏠 Home</button>` : ''}${job ? `<button class="btn" data-act="goto" data-x="${job.i}" data-z="${job.j}">💼 Work</button>` : ''}${inspected.agent ? `<button class="btn primary" data-act="follow">🎥 Follow</button>` : ''}</div>`;
-  } else if (inspected.kind === 'truck') {
-    html = `<header><h3>🚚 Delivery truck</h3><button class="mini" data-act="close">✕</button></header><div class="sub">Moving food, goods and garbage between farms, factories, shops, homes and landfills.</div>`;
+  } else if (inspected.kind === 'vehicle') {
+    const a = inspected.agent;
+    const V = { truck: ['🚚 Delivery truck', 'Hauling food, goods and garbage between farms, factories, shops and homes.'], bus: ['🚌 City bus', 'Public transport between homes and workplaces.'],
+      firetruck: ['🚒 Fire engine', 'Racing to a fire with sirens on.'], ambulance: ['🚑 Ambulance', 'Taking care of a sick citizen.'], policecar: ['🚓 Police patrol', 'Patrolling the neighbourhood around the station.'],
+      taxi: ['🚕 Taxi', 'Driving a passenger across town.'] }[a.model] || ['🚗 Car', ''];
+    html = `<header><h3>${V[0]}</h3><button class="mini" data-act="close">✕</button></header><div class="sub">${V[1]}</div>
+      <div class="ibtns"><button class="btn primary" data-act="follow">🎥 Follow</button></div>`;
   } else if (inspected.kind === 'building') {
     const b = G.buildings.get(inspected.id);
     if (!b) { closeInspector(); return; }
@@ -924,6 +1161,8 @@ function renderInspector() {
     const t = tileAt(i, j);
     html = `<header><h3>${t?.road ? '🛣️ Road' : s.avg < 0.1 ? '🌊 Water' : terrain.hasTree(i, j) ? '🌲 Forest' : s.avg > 18 ? '⛰️ Mountain' : '🌱 Open land'}</h3><button class="mini" data-act="close">✕</button></header>
       <div class="kv"><span>Tile</span><b>${i}, ${j}</b><span>Elevation</span><b>${(s.avg * 10).toFixed(0)} m</b>${t?.road ? '' : `<span>Slope</span><b>${s.max - s.min > 1.25 ? 'Too steep to build' : 'Buildable'}</b>`}<span>Air pollution</span><b>${pollutionAt(i, j).toFixed(1)}</b>
+      <span>Temperature</span><b>${N.temp.toFixed(1)} °C</b><span>Wind</span><b>${Math.round(N.windSpeed * 3.6)} km/h</b>
+      ${N.burning.has(tkey(i, j)) ? '<span>Status</span><b class="bad">🔥 Burning</b>' : terrain.burned.has(tkey(i, j)) ? '<span>Status</span><b>Scorched — regrowing</b>' : ''}
       ${t?.road ? `<span>Traffic</span><b>${agents.traffic.get(tkey(i, j)) || 0} cars</b>` : ''}</div>`;
   }
   el.innerHTML = html;
@@ -938,6 +1177,7 @@ $('inspector').addEventListener('click', (e) => {
   if (act === 'close') closeInspector();
   if (act === 'goto') flyTo(+b.dataset.x * T, +b.dataset.z * T);
   if (act === 'follow') { following = inspected.agent; toast('🎥 Following — drag the map to stop'); }
+  if (act === 'quality') applyQuality(b.dataset.q);
   if (act === 'demolish') { const bb = G.buildings.get(inspected.id); if (bb) { G.money += DEFS[bb.type].cost * 0.25 * bb.progress; removeBuilding(bb); } closeInspector(); }
 });
 controls.addEventListener('start', () => { following = null; flyTarget = null; });
@@ -954,6 +1194,7 @@ $('settings-close').addEventListener('click', () => $('settings').classList.add(
 $('settings').addEventListener('click', (e) => { if (e.target.id === 'settings') $('settings').classList.add('hidden'); });
 $('tax').addEventListener('input', (e) => { G.tax = +e.target.value; $('v-tax').textContent = `${G.tax}%`; });
 $('imports').addEventListener('change', (e) => { G.imports = e.target.checked; });
+$('quality-row').addEventListener('click', (e) => { const b = e.target.closest('[data-q]'); if (b) { applyQuality(b.dataset.q); renderBudget(); } });
 $('b-save').addEventListener('click', () => { save(true); });
 $('b-new').addEventListener('click', () => {
   if (!confirm('Start a brand-new world? Your current city will be deleted.')) return;
@@ -962,6 +1203,7 @@ $('b-new').addEventListener('click', () => {
 });
 function renderBudget() {
   $('tax').value = G.tax; $('v-tax').textContent = `${G.tax}%`; $('imports').checked = G.imports;
+  document.querySelectorAll('#quality-row [data-q]').forEach((b) => b.classList.toggle('primary', b.dataset.q === quality));
   const L = G.lastDay;
   const row = (k, v, bad) => `<span>${k}</span><b class="${bad ? 'bad' : ''}">${v}</b>`;
   $('budget').innerHTML = L
@@ -1065,6 +1307,11 @@ function boot(seed) {
   terrain = new Terrain(scene, seed, { isRoad, isBlocked: (i, j) => !!tileAt(i, j) });
   bindTerrain(terrain);
   agents = new Agents(scene, terrain);
+  physics = new Physics(scene, terrain);
+  bindNature(terrain, { onEvent: (t, k) => feed(t, k), onIgnite: (b) => hooks.onFire(b, true) });
+  terrain.growth = treeGrowth;
+  grass = new Grass(scene, terrain, (i, j) => !tileAt(i, j) && !terrain.burned.has(tkey(i, j)));
+  applyQuality(quality);
   // find dry, flat land near the origin to start on
   let best = null;
   for (let r = 0; r < 60 && !best; r += 2) {
@@ -1105,11 +1352,29 @@ function start(fromSave) {
   }, 30);
 }
 
-if (pendingSeed) { boot(+pendingSeed); start(false); }
-else {
-  boot(saved ? saved.seed : Math.floor(Math.random() * 1e9));
-  if (saved) $('t-continue').classList.remove('hidden');
+async function init() {
+  $('loading').classList.remove('hidden');
+  $('loading').textContent = 'Loading 3D models… 0%';
+  await loadAssets(renderer, (f) => { $('loading').textContent = `Loading 3D models… ${Math.round(f * 100)}%`; });
+  // snow settles on every roof, tree and lawn in winter
+  const seen = new Set();
+  for (const name of ['house_0', 'house_1', 'house_2', 'house_3', 'house_4', 'apartment_0', 'office_0', 'shop_0', 'shop_1', 'shop_2', 'shop_3', 'farm_0', 'farm_1', 'farm_2', 'factory', 'coal', 'school', 'hospital', 'police', 'fire', 'pump', 'tower', 'landfill', 'park_0', 'park_1', 'oak_0', 'pine_0', 'streetlight', 'car', 'solar', 'wind', 'apartment_1', 'apartment_2', 'office_1', 'office_2', 'office_3']) {
+    for (const p of getTemplate(name).prims) {
+      if (seen.has(p.material) || p.window || /Light|Lamp|Siren|Water|Window/.test(p.name)) continue;
+      seen.add(p.material);
+      addSnow(p.material);
+    }
+  }
+  $('loading').classList.add('hidden');
+  if (pendingSeed) { boot(+pendingSeed); start(false); }
+  else {
+    boot(saved ? saved.seed : Math.floor(Math.random() * 1e9));
+    if (saved) $('t-continue').classList.remove('hidden');
+  }
+  refreshEnvironment();
+  tick();
 }
+init().catch((err) => { $('loading').textContent = 'Could not load the 3D models: ' + err.message; console.error(err); });
 $('t-continue').addEventListener('click', () => start(true));
 $('t-new').addEventListener('click', () => {
   const seed = parseInt($('t-seed').value, 10) || Math.floor(Math.random() * 1e9);
@@ -1126,7 +1391,7 @@ $('t-new').addEventListener('click', () => {
 /*  Resize & loop                                                      */
 /* ================================================================== */
 function resize() {
-  renderer.setSize(innerWidth, innerHeight, false);
+  gfx.resize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.fov = camera.aspect < 0.8 ? 60 : 45;
   camera.updateProjectionMatrix();
@@ -1145,6 +1410,8 @@ function tick() {
   updateCamera(dt);
   const focus = walking ? walkPos : controls.target;
   terrain.update(focus.x, focus.z, started ? 2 : 3);
+  physics.setFocus(focus.x, focus.z);
+  physics.step(dt);
   updateEnvironment(dt);
   updateBuildings(dt);
   agents.update(dt, G.speed, !started || !G.speed);
@@ -1155,9 +1422,8 @@ function tick() {
     if (inspTimer > 0.6 && inspected) { inspTimer = 0; renderInspector(); }
     drawMinimap(dt);
   }
-  renderer.render(scene, camera);
+  gfx.render();
 }
-tick();
 
 // handy for tinkering from the dev console
-window.world = { renderer, scene, G, DEFS, terrain: () => terrain, flyTo, controls, spawn, agents: () => agents, selectTool };
+window.world = { renderer, scene, G, DEFS, terrain: () => terrain, physics: () => physics, flyTo, controls, spawn, agents: () => agents, selectTool, enterDrive, enterWalk, keys };

@@ -2,6 +2,7 @@
 // Pure game logic; rendering hooks are supplied by main.js through `hooks`.
 
 import { tkey } from './terrain.js';
+import * as nature from './nature.js';
 
 /* ------------------------------------------------------------------ */
 /*  Building catalog                                                   */
@@ -34,7 +35,11 @@ export const DEFS = {
   hospital:  { cat: 'services', name: 'Hospital', icon: '🏥', size: 2, cost: 6000, upkeep: 220, jobs: 18, wage: 90, power: 7, water: 5, radius: 26, desc: 'Heals the sick, improves health.' },
   police:    { cat: 'services', name: 'Police', icon: '🚓', size: 1, cost: 2000, upkeep: 90, jobs: 8, wage: 60, power: 2, water: 1, radius: 18, desc: 'Reduces crime nearby.' },
   fire:      { cat: 'services', name: 'Fire station', icon: '🚒', size: 1, cost: 2000, upkeep: 90, jobs: 8, wage: 60, power: 2, water: 2, radius: 18, desc: 'Puts out fires before buildings burn down.' },
-  park:      { cat: 'nature', name: 'Park', icon: '⛲', size: 1, cost: 250, upkeep: 5, radius: 8, poll: -3, desc: 'Happier, cleaner neighbourhood.' },
+  park:      { cat: 'nature', name: 'Park', icon: '⛲', size: 1, cost: 250, upkeep: 5, jobs: 1, wage: 30, radius: 8, poll: -3, desc: 'Happier, cleaner neighbourhood. Employs a gardener.' },
+  restaurant:{ cat: 'work', name: 'Restaurant', icon: '🍽️', size: 1, cost: 900, jobs: 7, wage: 35, power: 2, water: 2, foodUse: 10, profit: 200, radius: 12, desc: 'Chefs, cooks and waiters feed the neighbourhood (uses food).' },
+  bank:      { cat: 'work', name: 'Bank', icon: '🏦', size: 1, cost: 2200, jobs: 9, wage: 85, power: 2, water: 1, profit: 320, educated: true, desc: 'Tellers, advisers and managers. Lifts tax income.' },
+  university:{ cat: 'services', name: 'University', icon: '🎓', size: 2, cost: 7000, upkeep: 260, jobs: 16, wage: 95, power: 6, water: 3, radius: 30, desc: 'Gives adults degrees (needed for doctors, engineers, lawyers…).' },
+  yard:      { cat: 'work', name: 'Construction yard', icon: '🏗️', size: 2, cost: 1800, jobs: 14, wage: 50, power: 2, water: 1, profit: 150, desc: 'Builders, crane operators, electricians: construction goes much faster.' },
 };
 export const TOOLS = {
   inspect: { cat: null, name: 'Inspect', icon: '🔍', desc: 'Click buildings or people to see what they need.' },
@@ -43,6 +48,56 @@ export const TOOLS = {
 };
 export const ALL_TOOLS = { ...DEFS, ...TOOLS };
 const WAGE_SCALE = 2.5; // daily wages are taxed as income
+
+/* Occupations: each workplace employs real professions. minEdu 12 = school, 16 = university degree.
+   uniform = [shirt, trousers] colours worn in public. */
+const U = {
+  scrubs: [0x3fa7a0, 0x3fa7a0], white: [0xf4f4f2, 0x2c3e50], police: [0x1f2f5c, 0x1a2238], fire: [0xc9a35a, 0x2b2b2b],
+  hivis: [0xff7a00, 0x2c3e50], overall: [0x3d6b9a, 0x2f4f7f], suit: [0x34495e, 0x22313f], chef: [0xf8f8f8, 0x22262a],
+  green: [0x3b6e3b, 0x4a3b2a], navy: [0x2c3e50, 0x1f2a44], tech: [0x2f7d4f, 0x2c3e50], waste: [0x8fbf2f, 0x3a3a3a],
+};
+export const OCCUPATIONS = {
+  farm: [['Farmer', 0, U.overall], ['Farmhand', 0, U.green], ['Tractor driver', 0, U.overall], ['Agronomist', 16, U.green]],
+  shop: [['Cashier', 0], ['Shopkeeper', 12], ['Baker', 0, U.chef], ['Barista', 0], ['Stock clerk', 0]],
+  restaurant: [['Chef', 12, U.chef], ['Cook', 0, U.chef], ['Waiter', 0, U.white], ['Dishwasher', 0], ['Restaurant manager', 12, U.suit]],
+  office: [['Software developer', 16], ['Accountant', 16, U.suit], ['Lawyer', 16, U.suit], ['Architect', 16], ['Graphic designer', 12], ['Data analyst', 16], ['Office manager', 12, U.suit], ['Secretary', 12]],
+  bank: [['Bank teller', 12, U.suit], ['Financial adviser', 16, U.suit], ['Branch manager', 16, U.suit], ['Security guard', 0, U.navy]],
+  factory: [['Machine operator', 0, U.overall], ['Welder', 0, U.overall], ['Mechanic', 0, U.overall], ['Forklift driver', 0, U.hivis], ['Quality inspector', 12], ['Mechanical engineer', 16]],
+  coal: [['Plant operator', 12, U.overall], ['Electrician', 12, U.hivis], ['Power engineer', 16], ['Coal handler', 0, U.overall]],
+  solar: [['Solar technician', 12, U.tech]],
+  wind: [['Wind technician', 12, U.tech]],
+  pump: [['Water engineer', 16, U.tech], ['Plumber', 0, U.overall]],
+  tower: [['Water technician', 12, U.tech]],
+  landfill: [['Sanitation worker', 0, U.waste], ['Garbage truck driver', 0, U.waste], ['Recycling sorter', 0, U.waste]],
+  school: [['Teacher', 16], ['Head teacher', 16, U.suit], ['School nurse', 12, U.scrubs], ['Janitor', 0, U.navy], ['School cook', 0, U.chef]],
+  university: [['Professor', 16, U.suit], ['Researcher', 16], ['Lab technician', 12, U.white], ['Librarian', 12]],
+  hospital: [['Doctor', 16, U.white], ['Surgeon', 16, U.scrubs], ['Nurse', 12, U.scrubs], ['Paramedic', 12, U.hivis], ['Pharmacist', 16, U.white], ['Receptionist', 0]],
+  police: [['Police officer', 12, U.police], ['Detective', 16, U.suit], ['Dispatcher', 12, U.police]],
+  fire: [['Firefighter', 12, U.fire], ['Fire captain', 12, U.fire]],
+  yard: [['Construction worker', 0, U.hivis], ['Crane operator', 12, U.hivis], ['Electrician', 12, U.hivis], ['Plumber', 0, U.overall], ['Carpenter', 0, U.hivis], ['Site manager', 16, U.suit]],
+  park: [['Gardener', 0, U.green]],
+};
+function pickOccupation(c, type) {
+  const list = (OCCUPATIONS[type] || []).filter(([, min]) => c.edu >= min);
+  if (!list.length) return OCCUPATIONS[type]?.[0]?.[0] || 'Worker';
+  // the most qualified role a person can do is the most likely
+  list.sort((a, b) => b[1] - a[1]);
+  return (rnd() < 0.6 ? list[0] : list[Math.floor(rnd() * list.length)])[0];
+}
+export function occupationOf(c) {
+  const job = c.job != null ? G.buildings.get(c.job) : null;
+  if (!job) return null;
+  const row = (OCCUPATIONS[job.type] || []).find(([n]) => n === c.occ);
+  return { name: c.occ || 'Worker', uniform: row?.[2] || null, place: job };
+}
+export function roleOf(c) {
+  if (c.age < 6) return 'Toddler';
+  if (c.age < 18) return 'Student';
+  if (c.age >= 66) return 'Retired';
+  if (c.job != null && c.occ) return c.occ;
+  if (c.studying) return 'University student';
+  return 'Unemployed';
+}
 
 const FIRST = ['Ava', 'Liam', 'Mia', 'Noah', 'Zara', 'Arjun', 'Lena', 'Omar', 'Yuki', 'Ivan', 'Priya', 'Leo', 'Sofia', 'Kai', 'Amara', 'Diego', 'Nora', 'Ravi', 'Elif', 'Tomas', 'Hana', 'Jas', 'Simran', 'Mateo', 'Chloe', 'Ibrahim', 'Freya', 'Kwame', 'Mei', 'Oscar', 'Isla', 'Aman', 'Gita', 'Felix', 'Noor', 'Theo', 'Asha', 'Luca', 'Maya', 'Emil'];
 const LAST = ['Green', 'Singh', 'Rivera', 'Chen', 'Okafor', 'Novak', 'Haddad', 'Kumar', 'Silva', 'Berg', 'Tanaka', 'Moreau', 'Kaur', 'Ali', 'Jensen', 'Costa', 'Patel', 'Nakamura', 'Fischer', 'Mensah', 'Rossi', 'Ivanova', 'Lopez', 'Gill', 'Brooks'];
@@ -124,7 +179,7 @@ export function canPlace(type, i, j) {
     if (tileAt(a, b)) return { ok: false, reason: 'Something is already built here' };
     const s = terrain.tileStats(a, b);
     if (s.avg < 0.15 || s.min < -0.05) return { ok: false, reason: "Can't build on water" };
-    if (s.max - s.min > (type === 'road' ? 1.5 : 1.25)) return { ok: false, reason: 'Too steep' };
+    if (s.max - s.min > (type === 'road' ? 0.7 : 0.9)) return { ok: false, reason: type === 'road' ? 'Too steep for a road (max ~30% grade)' : 'Too steep — find flatter ground' };
   }
   if (d.nearWater) {
     let near = false;
@@ -296,7 +351,8 @@ function makeCitizen(home, age) {
     id: G.nextId++,
     name: `${FIRST[Math.floor(rnd() * FIRST.length)]} ${LAST[Math.floor(rnd() * LAST.length)]}`,
     age, home: home.id, job: null,
-    edu: age >= 18 ? (rnd() < 0.45 ? 12 : Math.floor(rnd() * 9)) : 0,
+    edu: age >= 18 ? (rnd() < 0.18 ? 16 : rnd() < 0.5 ? 12 : Math.floor(rnd() * 9)) : 0,
+    female: rnd() < 0.5,
     health: 80 + rnd() * 20, happy: 65, sad: 0, sick: false, born: day(),
   };
   G.citizens.set(c.id, c);
@@ -346,12 +402,16 @@ function rebuildPollution() {
 /*  Time                                                               */
 /* ------------------------------------------------------------------ */
 export function advance(hours) {
+  // construction crews: without a yard, small contractors build slowly; staffed yards speed it up
+  let crews = 0;
+  for (const b of G.buildings.values()) if (b.type === 'yard' && b.working) crews += b.staff;
+  G.buildRate = 0.55 + Math.min(1.6, crews * 0.8);
   const before = G.t;
   G.t += hours;
   // construction progresses continuously
   for (const b of G.buildings.values()) {
     if (b.progress < 1) {
-      b.progress = Math.min(1, b.progress + hours / (b.size === 2 ? 5 : 2.5));
+      b.progress = Math.min(1, b.progress + (hours / (b.size === 2 ? 5 : 2.5)) * G.buildRate);
       if (b.progress >= 1) G.netDirty = true;
     }
   }
@@ -376,10 +436,12 @@ function covered(b, list, radius) {
 
 function hourly(hAbs) {
   if (G.netDirty) rebuildNetworks();
-  updateWeather();
+  nature.hourlyNature(G);
   const se = season();
   const hour = hAbs % 24;
-  const sun = sunFactor() * cloudFactor() * se.solar;
+  const sun = nature.solarPower(G.t, G.weather.kind, Math.min(1, (G.stats.pop || 0) / 4000));
+  const heat = nature.heatingFactor();
+  G.wellDraw = 0;
   const windK = G.weather.wind;
   const bl = [...G.buildings.values()];
 
@@ -396,13 +458,13 @@ function hourly(hAbs) {
       const crew = d.jobs ? 0.5 + 0.5 * b.staff : 1;
       let out = d.powerOut * crew;
       if (d.solar) out *= sun;
-      if (d.windy) out *= Math.min(1, Math.pow(windK, 1.4) * 1.3) * (G.weather.kind === 'storm' && windK > 0.95 ? 0.2 : 1);
+      if (d.windy) out *= nature.windPower();
       b.output = out;
       n.pSup += out;
     }
     if (d.power) {
       const home = d.homes ? 1 : 0;
-      b.pNeed = d.power * (home ? (hour >= 18 || hour < 7 ? 1.25 : 0.8) * se.heat * se.cool : (hour >= 8 && hour < 18 ? 1.2 : 0.6));
+      b.pNeed = d.power * (home ? (hour >= 18 || hour < 7 ? 1.25 : 0.8) * heat : (hour >= 8 && hour < 18 ? 1.2 : 0.6) * (0.6 + 0.4 * heat));
       n.pDem += b.pNeed;
     }
   }
@@ -418,10 +480,12 @@ function hourly(hAbs) {
   for (const b of order) {
     const d = DEFS[b.type];
     if (d.waterOut && b.powered) {
-      b.output = d.waterOut * (d.jobs ? 0.4 + 0.6 * b.staff : 1);
+      // wells depend on the aquifer, lake pumps on open (unfrozen) water
+      b.output = d.waterOut * (d.jobs ? 0.4 + 0.6 * b.staff : 1) * (d.nearWater ? nature.pumpFactor() : nature.wellFactor());
+      if (!d.nearWater) G.wellDraw += b.output;
       net(b.comp).wSup += b.output;
     }
-    if (d.water) { b.wNeed = d.water * se.water; net(b.comp).wDem += b.wNeed; }
+    if (d.water) { b.wNeed = d.water * nature.waterDemandFactor(); net(b.comp).wDem += b.wNeed; }
   }
   const wLeft = new Map([...nets].map(([k, n]) => [k, n.wSup]));
   for (const b of order) {
@@ -438,11 +502,17 @@ function hourly(hAbs) {
 
   /* ---- service coverage ---- */
   const svc = {};
-  for (const t of ['school', 'hospital', 'police', 'fire', 'park', 'shop']) svc[t] = serviceList(t);
+  for (const t of ['school', 'hospital', 'police', 'fire', 'park', 'shop', 'university', 'restaurant']) svc[t] = serviceList(t);
+  G.fireCover = (i, j) => !!covered({ i, j, size: 1 }, svc.fire, DEFS.fire.radius);
+  G.buildingAt = buildingAt;
   for (const b of bl) {
     b.cov = {};
     for (const t of ['police', 'fire']) b.cov[t] = !!covered(b, svc[t], DEFS[t].radius);
-    if (DEFS[b.type].homes) for (const t of ['school', 'hospital', 'park', 'shop']) b.cov[t] = !!covered(b, svc[t], DEFS[t].radius);
+    if (DEFS[b.type].homes) {
+      for (const t of ['school', 'hospital', 'park', 'shop']) b.cov[t] = !!covered(b, svc[t], DEFS[t].radius);
+      b.cov.university = !!covered(b, svc.university, DEFS.university.radius);
+      b.cov.restaurant = !!covered(b, svc.restaurant, DEFS.restaurant.radius);
+    }
   }
 
   /* ---- production & consumption ---- */
@@ -450,7 +520,8 @@ function hourly(hAbs) {
   let foodMade = 0, goodsMade = 0, goodsNeed = 0;
   for (const b of bl) {
     const d = DEFS[b.type];
-    if (d.food) foodMade += (d.food / 24) * b.eff * se.farm;
+    if (d.food) foodMade += (d.food / 24) * b.eff * nature.cropFactor();
+    if (d.foodUse && b.working) foodMade -= (d.foodUse / 24) * Math.max(0.3, b.staff);
     if (d.goods) goodsMade += (d.goods / 24) * b.eff;
     if (d.goodsUse && b.working) goodsNeed += (d.goodsUse / 24) * Math.max(0.3, b.staff);
   }
@@ -502,13 +573,14 @@ function hourly(hAbs) {
     if (!list || !list.length) continue;
     let best = null, bd = Infinity;
     for (const w of list) {
-      if (DEFS[w.type].educated && c.edu < 10) continue;
+      if (DEFS[w.type].educated && c.edu < 12) continue;
       const dd = Math.abs(w.i - home.i) + Math.abs(w.j - home.j);
       if (dd < bd) { bd = dd; best = w; }
     }
     if (!best) continue;
     best.workers.add(c.id);
     c.job = best.id;
+    c.occ = pickOccupation(c, best.type);
     assigned++;
     if (best.workers.size >= DEFS[best.type].jobs) list.splice(list.indexOf(best), 1);
   }
@@ -613,6 +685,7 @@ function findVacancy() {
 }
 
 function daily() {
+  nature.dailyNature(G);
   /* ---- ageing, school, births, deaths ---- */
   const deaths = [];
   const births = [];
@@ -620,6 +693,9 @@ function daily() {
     c.age += 1;
     const home = G.buildings.get(c.home);
     if (c.age >= 6 && c.age < 18 && home?.cov.school) c.edu = Math.min(12, c.edu + 1);
+    // young adults without work study at a university in reach; 4 years earns a degree
+    c.studying = c.age >= 18 && c.age < 30 && c.edu >= 12 && c.edu < 16 && c.job == null && home?.cov.university;
+    if (c.studying) c.edu = Math.min(16, c.edu + 1);
     if (c.age === 66 && c.job != null) { const j = G.buildings.get(c.job); if (j) j.workers.delete(c.id); c.job = null; }
     let pDie = c.age > 62 ? (c.age - 62) * 0.012 : 0.0005;
     if (c.health < 15) pDie += 0.25;
@@ -748,7 +824,14 @@ function computeAlerts() {
   let polluted = 0;
   for (const b of G.buildings.values()) if (DEFS[b.type].homes && pollutionAt(b.i, b.j) > 6) polluted++;
   if (polluted) add(2, '🏭', `${polluted} homes suffer from heavy pollution. Plant trees, add parks, or move industry away.`);
-  if (season().name === 'Winter') add(0, '❄️', 'Winter: heating raises power demand, farms produce 70% less.');
+  const N = nature.N;
+  if (N.temp < 5) add(0, '🥶', `${N.temp.toFixed(0)} °C: heating pushes power demand up ${Math.round((nature.heatingFactor() - 1) * 100)}%, crops stop growing.`);
+  if (N.temp > 28) add(1, '🥵', `Heatwave ${N.temp.toFixed(0)} °C: air-conditioning and water use rise, forests dry out.`);
+  if (N.groundwater < 0.25) add(2, '🏜️', `Drought: groundwater at ${Math.round(N.groundwater * 100)}% — wells (water towers) are weakening. Lake pumps still work.`);
+  if (N.ice > 0.5) add(1, '🧊', 'Lakes are frozen over: water pumps run at reduced capacity.');
+  if (N.burning.size) add(3, '🔥', `Wildfire: ${N.burning.size} forest tiles burning, spreading downwind. Fire stations nearby help; rain puts it out.`);
+  if (N.dryness > 0.6 && !N.burning.size) add(1, '🌲', 'Forests are tinder-dry: high wildfire risk in storms.');
+  if (G.buildRate < 0.7 && [...G.buildings.values()].some((b) => b.progress < 1)) add(0, '🏗️', 'No construction yard: buildings go up slowly. Build one to hire construction crews.');
   a.sort((x, y) => y.sev - x.sev);
   return a;
 }
@@ -777,7 +860,8 @@ export function serialize() {
     food: G.food, goods: G.goods, streetGarbage: G.streetGarbage, weather: G.weather, history: G.history,
     roads: [...G.tiles].filter(([, t]) => t.road).map(([k]) => k),
     buildings: [...G.buildings.values()].map((b) => [b.id, b.type, b.i, b.j, b.rot, b.variant, +b.progress.toFixed(3), Math.round(b.fill), b.fire]),
-    citizens: [...G.citizens.values()].map((c) => [c.id, c.name, c.age, c.home, c.job, c.edu, Math.round(c.health), Math.round(c.happy), c.sick ? 1 : 0]),
+    citizens: [...G.citizens.values()].map((c) => [c.id, c.name, c.age, c.home, c.job, c.edu, Math.round(c.health), Math.round(c.happy), c.sick ? 1 : 0, c.female ? 1 : 0, c.occ || '']),
+    nature: nature.serializeNature(),
     overrides: [...terrain.overrides],
     cleared: [...terrain.cleared],
     planted: [...terrain.planted],
@@ -796,10 +880,12 @@ export function restore(data) {
   for (const [id, type, i, j, rot, variant, progress, fill, fire] of data.buildings) {
     placeBuilding(type, i, j, rot, { free: true, id, variant, progress, fill, fire });
   }
-  for (const [id, name, age, home, job, edu, health, happy, sick] of data.citizens) {
+  nature.restoreNature(data.nature);
+  for (const [id, name, age, home, job, edu, health, happy, sick, female, occ] of data.citizens) {
     const h = G.buildings.get(home);
     if (!h) continue;
-    const c = { id, name, age, home, job: G.buildings.has(job) ? job : null, edu, health, happy, sad: 0, sick: !!sick, born: 1 };
+    const c = { id, name, age, home, job: G.buildings.has(job) ? job : null, edu, health, happy, sad: 0, sick: !!sick, born: 1, female: female ?? (id % 2 === 1), occ: occ || null };
+    if (c.job != null && !c.occ) c.occ = pickOccupation(c, G.buildings.get(c.job).type);
     G.citizens.set(id, c);
     h.residents.add(id);
     if (c.job != null) G.buildings.get(c.job).workers.add(id);
