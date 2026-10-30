@@ -7,9 +7,10 @@ import { Physics, variantSuffix } from './physics.js';
 import {
   G, DEFS, TOOLS, ALL_TOOLS, CATS, hooks, bindTerrain, canPlace, placeRoad, placeBuilding, plantTree, bulldoze,
   removeBuilding, advance, tileAt, isRoad, hourOfDay, day, season, serialize, restore, initialTick, pollutionAt, isAdult,
-  sunFactor, DAYS_PER_SEASON, roleOf, occupationOf,
+  sunFactor, DAYS_PER_SEASON, roleOf, occupationOf, placeRail, isRail,
 } from './sim.js';
 import { Agents } from './agents.js';
+import { Transport } from './transport.js';
 import { Graphics, QUALITY } from './graphics.js';
 import { Grass } from './grass.js';
 import { N, bindNature, sunVector, moonVector, moonLight, moonPhase, treeGrowth, dayLength, LATITUDE } from './nature.js';
@@ -45,7 +46,7 @@ controls.screenSpacePanning = false;
 controls.minDistance = 8;
 controls.maxDistance = 210;
 controls.minPolarAngle = 0.15;
-controls.maxPolarAngle = 1.38;
+controls.maxPolarAngle = 1.52;
 controls.zoomToCursor = true;
 controls.zoomSpeed = 1.2;
 controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
@@ -150,7 +151,7 @@ scene.add(water);
 /* ================================================================== */
 /*  World                                                              */
 /* ================================================================== */
-let terrain = null, agents = null, physics = null;
+let terrain = null, agents = null, physics = null, transport = null;
 const meshes = new Map(); // building id -> { icon, fence, height, matrix }
 
 /* Buildings render as instanced batches: one InstancedMesh per model primitive. */
@@ -285,7 +286,7 @@ let ghost = null;
 /* ================================================================== */
 /*  Tools & input                                                      */
 /* ================================================================== */
-const LINE_TOOLS = new Set(['road', 'bulldoze', 'tree']);
+const LINE_TOOLS = new Set(['road', 'rail', 'bulldoze', 'tree']);
 let tool = 'inspect';
 let rotManual = null;
 let currentCat = 'roads';
@@ -311,11 +312,12 @@ function originFor(type, h) {
 
 function autoRot(type, i, j) {
   const s = DEFS[type].size;
+  const isFront = type === 'station' ? isRail : type === 'port' ? (a, b) => terrain.isWater(a, b) : isRoad;
   for (let k = 0; k < s; k++) {
-    if (isRoad(i + k, j + s)) return 0;
-    if (isRoad(i + s, j + k)) return Math.PI / 2;
-    if (isRoad(i - 1, j + k)) return -Math.PI / 2;
-    if (isRoad(i + k, j - 1)) return Math.PI;
+    if (isFront(i + k, j + s)) return 0;
+    if (isFront(i + s, j + k)) return Math.PI / 2;
+    if (isFront(i - 1, j + k)) return -Math.PI / 2;
+    if (isFront(i + k, j - 1)) return Math.PI;
   }
   return 0;
 }
@@ -339,7 +341,7 @@ function selectTool(t) {
   setMouseMode(t !== 'inspect');
   document.querySelectorAll('.tool').forEach((el) => el.classList.toggle('on', el.dataset.tool === t));
   if (ghost) { scene.remove(ghost); ghost = null; }
-  if (DEFS[t] && t !== 'road') {
+  if (DEFS[t] && t !== 'road' && t !== 'rail') {
     ghost = templateGroup(`${t}${variantSuffix({ type: t, variant: 0 })}`, ghostOk);
     ghost.traverse((o) => { if (o.isMesh) o.castShadow = false; });
     ghost.visible = false;
@@ -364,9 +366,11 @@ function updatePreview() {
     for (const [i, j] of tiles) {
       let ok;
       if (tool === 'road') ok = isRoad(i, j) || canPlace('road', i, j).ok;
+      else if (tool === 'rail') ok = isRail(i, j) || canPlace('rail', i, j).ok;
       else if (tool === 'tree') ok = canPlace('tree', i, j).ok;
       else ok = !!(tileAt(i, j) || terrain.hasTree(i, j));
       if (tool === 'road' && !isRoad(i, j) && ok) { valid++; cost += DEFS.road.cost; }
+      if (tool === 'rail' && !isRail(i, j) && ok) { valid++; cost += DEFS.rail.cost; }
       if (tool === 'tree' && ok) { valid++; cost += TOOLS.tree.cost; }
       if (tool === 'bulldoze' && ok) valid++;
       const h = terrain.tileStats(i, j).max;
@@ -412,7 +416,7 @@ function setLabel(text, bad = false) {
 }
 
 function applyAt(h) {
-  if (DEFS[tool] && tool !== 'road') {
+  if (DEFS[tool] && tool !== 'road' && tool !== 'rail') {
     const [i, j] = originFor(tool, h);
     const chk = canPlace(tool, i, j);
     if (!chk.ok) { toast(chk.reason, 'bad'); return; }
@@ -434,6 +438,7 @@ function applyLine(a, b) {
   let n = 0;
   for (const [i, j] of tiles) {
     if (tool === 'road') { if (!isRoad(i, j) && placeRoad(i, j)) n++; }
+    else if (tool === 'rail') { if (!isRail(i, j) && placeRail(i, j)) n++; }
     else if (tool === 'tree') { if (plantTree(i, j)) n++; }
     else if (tool === 'bulldoze') {
       const tr = terrain.treeAt(i, j);
@@ -443,6 +448,7 @@ function applyLine(a, b) {
       if (what === 'tree' && tr && n < 12) { physics.refreshStatics(); physics.fellTree(tr); }
     }
   }
+  if (!n && tool === 'rail') toast(canPlace('rail', b.i, b.j).reason || 'Nothing to build', 'bad');
   if (!n && tool === 'road') toast(canPlace('road', b.i, b.j).reason || 'Nothing to build', 'bad');
 }
 
@@ -500,8 +506,9 @@ window.addEventListener('keydown', (e) => {
   keys.add(k);
   if (!started) return;
   if (k === 'escape' && !walking) { if (tool !== 'inspect') selectTool('inspect'); else closeInspector(); }
+  if (k === 'g') { if (flying) exitFirstPerson(); else enterDrone(); return; }
   if (walking) {
-    if (k === 'escape' && driving) exitFirstPerson();
+    if (k === 'escape' && (driving || flying)) exitFirstPerson();
     if (k === 'c' && !driving) enterDrive();
     if (k === 'f' && driving) { const x = walkPos.x, z = walkPos.z; exitFirstPerson(true); controls.target.set(x, 0, z); enterWalk(); }
     if (k === 'r' && driving) physics.resetCar();
@@ -587,6 +594,18 @@ function exitFirstPerson(silent = false) {
   if (!walking) return;
   walking = false;
   driving = false;
+  const wasFlying = flying;
+  flying = false;
+  $('dronepad').classList.add('hidden');
+  if (wasFlying && !silent) {
+    controls.enabled = true;
+    $('hud').classList.remove('walking');
+    $('walk-hint').classList.add('hidden');
+    const ground = Math.max(WATER, terrain.surfaceH(walkPos.x + Math.sin(yaw) * 20, walkPos.z + Math.cos(yaw) * 20));
+    controls.target.set(walkPos.x + Math.sin(yaw) * 20, ground, walkPos.z + Math.cos(yaw) * 20);
+    camera.position.copy(walkPos).setY(Math.max(walkPos.y, ground + 8));
+    return;
+  }
   physics.removePlayer();
   physics.removeCar();
   controls.enabled = true;
@@ -598,11 +617,69 @@ function exitFirstPerson(silent = false) {
   camera.position.set(walkPos.x - Math.sin(yaw) * 30, ground + 28, walkPos.z - Math.cos(yaw) * 30);
 }
 const exitWalk = () => exitFirstPerson();
+
+/* ---------- 360° viewing ---------- */
+let flying = false;
+const look = { dragging: false, x: 0, y: 0, yaw: 0, pitch: 0, last: 0, spin: false };
+function enterDrone() {
+  if (walking) exitFirstPerson(true);
+  const off = camera.position.clone().sub(controls.target);
+  yaw = Math.atan2(-off.x, -off.z);
+  pitch = -Math.asin(clamp(off.y / off.length(), -1, 1)) * 0.6;
+  startFirstPerson(camera.position.x, camera.position.z);
+  walkPos.copy(camera.position);
+  flying = true;
+  $('walk-hint').innerHTML = '🛸 Drone · drag to look 360° · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>E</kbd>/<kbd>Q</kbd> up/down · <kbd>Shift</kbd> fast · <kbd>Esc</kbd> map';
+  $('dronepad').classList.remove('hidden');
+}
+canvas.addEventListener('pointerdown', (e) => {
+  if (!walking || (document.pointerLockElement === canvas)) return;
+  look.dragging = true; look.x = e.clientX; look.y = e.clientY;
+});
+window.addEventListener('pointerup', () => { if (look.dragging) { look.dragging = false; look.last = performance.now(); } });
+window.addEventListener('pointermove', (e) => {
+  if (!look.dragging) return;
+  const dx = e.clientX - look.x, dy = e.clientY - look.y;
+  look.x = e.clientX; look.y = e.clientY;
+  if (driving) { look.yaw -= dx * 0.006; look.pitch = clamp(look.pitch - dy * 0.004, -0.4, 1.0); }
+  else { yaw -= dx * 0.004; pitch = clamp(pitch - dy * 0.004, -1.55, 1.55); }
+});
+$('drone-exit').addEventListener('click', () => exitFirstPerson());
+// map camera: rotate, tilt, auto-orbit and north-up compass
+function orbitBy(dAz, dPolar) {
+  const off = camera.position.clone().sub(controls.target);
+  const sph = new THREE.Spherical().setFromVector3(off);
+  sph.theta += dAz;
+  sph.phi = clamp(sph.phi + dPolar, controls.minPolarAngle, controls.maxPolarAngle);
+  off.setFromSpherical(sph);
+  camera.position.copy(controls.target).add(off);
+}
+let viewAnim = null;
+function animateOrbit(dAz, dPolar, ms = 450) { viewAnim = { dAz, dPolar, t: 0, ms }; }
+$('viewpad').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-view]');
+  if (!b) return;
+  const v = b.dataset.view;
+  if (walking && v !== 'drone') exitFirstPerson();
+  if (v === 'left') animateOrbit(Math.PI / 4, 0);
+  if (v === 'right') animateOrbit(-Math.PI / 4, 0);
+  if (v === 'up') animateOrbit(0, -0.25);
+  if (v === 'down') animateOrbit(0, 0.25);
+  if (v === 'spin') { controls.autoRotate = !controls.autoRotate; controls.autoRotateSpeed = 1.2; b.classList.toggle('on', controls.autoRotate); }
+  if (v === 'north') { const off = camera.position.clone().sub(controls.target); const sph = new THREE.Spherical().setFromVector3(off); animateOrbit(-sph.theta, 0); }
+  if (v === 'drone') { if (flying) exitFirstPerson(); else enterDrone(); }
+});
+// touch / mouse buttons that act like held keys while flying
+for (const el of document.querySelectorAll('#dronepad [data-key]')) {
+  const k = el.dataset.key;
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); keys.add(k); });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(ev, () => keys.delete(k));
+}
 document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas && walking && !driving) exitFirstPerson(); });
 document.addEventListener('mousemove', (e) => {
   if (!walking || driving || document.pointerLockElement !== canvas) return;
   yaw -= e.movementX * 0.0022;
-  pitch = clamp(pitch - e.movementY * 0.0022, -1.4, 1.4);
+  pitch = clamp(pitch - e.movementY * 0.0022, -1.55, 1.55);
 });
 canvas.addEventListener('mousedown', (e) => {
   if (!walking || driving || document.pointerLockElement !== canvas || e.button !== 0) return;
@@ -624,8 +701,39 @@ $('b-home').addEventListener('click', () => {
 });
 
 function updateCamera(dt) {
+  if (viewAnim && !walking) {
+    const step = Math.min(dt * 1000 / viewAnim.ms, 1 - viewAnim.t);
+    orbitBy(viewAnim.dAz * step, viewAnim.dPolar * step);
+    viewAnim.t += step;
+    if (viewAnim.t >= 1) viewAnim = null;
+  }
+  const needle = $('compass-needle');
+  if (needle) {
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    needle.style.transform = `rotate(${Math.atan2(dir.x, -dir.z)}rad)`;
+  }
   const near = walking ? 0.02 : 0.3;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
+  if (walking && flying) {
+    // free-flying camera: full 360° yaw, look straight up or down, fly anywhere
+    const fast = keys.has('shift') ? 4 : 1;
+    const speed = (1.5 + Math.max(0, walkPos.y - terrain.surfaceH(walkPos.x, walkPos.z)) * 0.6) * fast * dt;
+    const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+    const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
+    if (keys.has('w') || keys.has('arrowup')) walkPos.addScaledVector(dir, speed);
+    if (keys.has('s') || keys.has('arrowdown')) walkPos.addScaledVector(dir, -speed);
+    if (keys.has('a') || keys.has('arrowleft')) walkPos.addScaledVector(right, -speed);
+    if (keys.has('d') || keys.has('arrowright')) walkPos.addScaledVector(right, speed);
+    if (keys.has('e') || keys.has(' ')) walkPos.y += speed;
+    if (keys.has('q')) walkPos.y -= speed;
+    if (look.spin) yaw += dt * 0.35;
+    const floor = Math.max(WATER, terrain.surfaceH(walkPos.x, walkPos.z)) + 0.25;
+    walkPos.y = clamp(walkPos.y, floor, 260);
+    camera.position.copy(walkPos);
+    camera.lookAt(walkPos.x + dir.x, walkPos.y + dir.y, walkPos.z + dir.z);
+    return;
+  }
   if (walking && driving && physics.car) {
     const input = {
       throttle: (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0),
@@ -637,12 +745,16 @@ function updateCamera(dt) {
     walkPos.copy(pos);
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(quat).setY(0).normalize();
     yaw = Math.atan2(fwd.x, fwd.z);
-    const want = pos.clone().addScaledVector(fwd, -1.6).add(new THREE.Vector3(0, 0.62, 0));
+    // drag the mouse (or a finger) to swing the camera 360° around the car; it eases back behind after a moment
+    if (!look.dragging && performance.now() - look.last > 2500) { look.yaw *= 1 - Math.min(1, dt * 2); look.pitch *= 1 - Math.min(1, dt * 2); }
+    const camDir = fwd.clone().applyAxisAngle(UP, look.yaw);
+    const dist = 1.6, h = 0.62 + look.pitch * 1.4;
+    const want = pos.clone().addScaledVector(camDir, -dist * Math.cos(look.pitch * 0.6)).add(new THREE.Vector3(0, Math.max(0.15, h), 0));
     const ground = Math.max(WATER, terrain.surfaceH(want.x, want.z)) + 0.15;
     if (want.y < ground) want.y = ground;
-    chase.lerp(want, Math.min(1, dt * 5));
+    chase.lerp(want, Math.min(1, dt * (look.dragging ? 12 : 5)));
     camera.position.copy(chase);
-    camera.lookAt(pos.x + fwd.x * 0.8, pos.y + 0.32, pos.z + fwd.z * 0.8);
+    camera.lookAt(pos.x + camDir.x * 0.8, pos.y + 0.32, pos.z + camDir.z * 0.8);
     const sp = $('speedo');
     if (sp) sp.textContent = `${Math.round(Math.abs(physics.carForwardSpeed()))} km/h`;
     return;
@@ -693,7 +805,7 @@ function updateCamera(dt) {
   }
   if (following) {
     const a = following;
-    if (![...agents.cars, ...agents.peds].includes(a)) following = null;
+    if (!a.transport && ![...agents.cars, ...agents.peds].includes(a)) following = null;
     else { const d = a.pos.clone().sub(t); d.y = 0; d.multiplyScalar(Math.min(1, dt * 4)); t.add(d); camera.position.add(d); }
   }
   // keep the orbit centre on the ground so the camera glides over hills
@@ -1051,6 +1163,8 @@ function inspectAt(cx, cy, h) {
   const a = agents.pick(raycaster);
   if (a && a.cid != null) { inspected = { kind: 'citizen', id: a.cid, agent: a }; renderInspector(); return; }
   if (a && a.model) { inspected = { kind: 'vehicle', agent: a }; renderInspector(); return; }
+  const tp = transport.pick(raycaster);
+  if (tp) { inspected = { kind: 'vehicle', agent: { model: tp.kind, pos: tp.obj.pos || null, obj: tp.obj } }; renderInspector(); return; }
   // buildings: ray against the instanced models first so tall buildings are easy to click
   let best = null;
   for (const bt of batches.values()) {
@@ -1125,7 +1239,13 @@ function renderInspector() {
     const a = inspected.agent;
     const V = { truck: ['🚚 Delivery truck', 'Hauling food, goods and garbage between farms, factories, shops and homes.'], bus: ['🚌 City bus', 'Public transport between homes and workplaces.'],
       firetruck: ['🚒 Fire engine', 'Racing to a fire with sirens on.'], ambulance: ['🚑 Ambulance', 'Taking care of a sick citizen.'], policecar: ['🚓 Police patrol', 'Patrolling the neighbourhood around the station.'],
-      taxi: ['🚕 Taxi', 'Driving a passenger across town.'] }[a.model] || ['🚗 Car', ''];
+      taxi: ['🚕 Taxi', 'Driving a passenger across town.'],
+      locomotive: ['🚆 Passenger train', `Running between stations at up to 72 km/h · now ${Math.round((a.obj?.v || 0) * 36)} km/h${a.obj?.dwell > 0 ? ' · boarding at the platform' : ''}.`],
+      carriage: ['🚃 Train carriage', 'About 80 seats per carriage.'],
+      cargo_ship: ['🚢 Container ship', `${a.obj?.state === 'in' ? 'Arriving at port' : 'Leaving port'} with containers of imported goods.`],
+      ferry: ['⛴️ Ferry', 'Carrying passengers and cars across the water.'],
+      sailboat: ['⛵ Sailboat', `Sailing on the wind (${Math.round(N.windSpeed * 3.6)} km/h). Heels away from the wind.`],
+      plane: [a.obj?.cruise ? '✈️ Airliner at cruise altitude' : '🛩️ Regional turboprop', a.obj?.cruise ? 'Passing overhead at ~10 km.' : 'Flying passengers in and out of the airport.'] }[a.model] || ['🚗 Car', ''];
     html = `<header><h3>${V[0]}</h3><button class="mini" data-act="close">✕</button></header><div class="sub">${V[1]}</div>
       <div class="ibtns"><button class="btn primary" data-act="follow">🎥 Follow</button></div>`;
   } else if (inspected.kind === 'building') {
@@ -1176,7 +1296,7 @@ $('inspector').addEventListener('click', (e) => {
   const act = b.dataset.act;
   if (act === 'close') closeInspector();
   if (act === 'goto') flyTo(+b.dataset.x * T, +b.dataset.z * T);
-  if (act === 'follow') { following = inspected.agent; toast('🎥 Following — drag the map to stop'); }
+  if (act === 'follow') { following = inspected.agent.obj ? { pos: inspected.agent.obj.pos, transport: true } : inspected.agent; if (inspected.agent.obj && !inspected.agent.obj.pos) { following = null; toast('Trains can be watched from the map', ''); return; } toast('🎥 Following — drag the map to stop'); }
   if (act === 'quality') applyQuality(b.dataset.q);
   if (act === 'demolish') { const bb = G.buildings.get(inspected.id); if (bb) { G.money += DEFS[bb.type].cost * 0.25 * bb.progress; removeBuilding(bb); } closeInspector(); }
 });
@@ -1254,6 +1374,7 @@ function drawMinimapMarker() {
     const x = (i * T - cx) * s + 90, y = (j * T - cz) * s + 90;
     if (x < 0 || y < 0 || x > 180 || y > 180) continue;
     if (t.road) { mg.fillStyle = '#4b4f58'; mg.fillRect(x, y, Math.max(1, T * s), Math.max(1, T * s)); }
+    else if (t.rail) { mg.fillStyle = '#8a5a3a'; mg.fillRect(x, y, Math.max(1, T * s), Math.max(1, T * s)); }
   }
   for (const b of G.buildings.values()) {
     const x = (b.i * T - cx) * s + 90, y = (b.j * T - cz) * s + 90, w = b.size * T * s;
@@ -1304,9 +1425,10 @@ const spawn = new THREE.Vector3();
 let started = false;
 function boot(seed) {
   G.seed = seed;
-  terrain = new Terrain(scene, seed, { isRoad, isBlocked: (i, j) => !!tileAt(i, j) });
+  terrain = new Terrain(scene, seed, { isRoad, isRail, isBlocked: (i, j) => !!tileAt(i, j) });
   bindTerrain(terrain);
   agents = new Agents(scene, terrain);
+  transport = new Transport(scene, terrain);
   physics = new Physics(scene, terrain);
   bindNature(terrain, { onEvent: (t, k) => feed(t, k), onIgnite: (b) => hooks.onFire(b, true) });
   terrain.growth = treeGrowth;
@@ -1415,6 +1537,7 @@ function tick() {
   updateEnvironment(dt);
   updateBuildings(dt);
   agents.update(dt, G.speed, !started || !G.speed);
+  transport.update(dt, focus, G.speed, !started || !G.speed);
   if (started) {
     hudTimer += dt;
     if (hudTimer > 0.25) { hudTimer = 0; renderHUD(); }
@@ -1426,4 +1549,4 @@ function tick() {
 }
 
 // handy for tinkering from the dev console
-window.world = { renderer, scene, G, DEFS, terrain: () => terrain, physics: () => physics, flyTo, controls, spawn, agents: () => agents, selectTool, enterDrive, enterWalk, keys };
+window.world = { transport: () => transport, renderer, scene, G, DEFS, terrain: () => terrain, physics: () => physics, flyTo, controls, spawn, agents: () => agents, selectTool, enterDrive, enterWalk, keys };

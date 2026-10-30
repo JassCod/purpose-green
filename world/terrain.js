@@ -86,7 +86,7 @@ asphaltMat.normalScale.set(0.6, 0.6);
 const markMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
 export const terrainTextures = { tex };
 
-const COL = { line: new THREE.Color(0xf2ead0), curb: new THREE.Color(0xbdb8ad), yellow: new THREE.Color(0xf0c040) };
+const COL = { line: new THREE.Color(0xf2ead0), curb: new THREE.Color(0xbdb8ad), yellow: new THREE.Color(0xf0c040), ballast: new THREE.Color(0x7d7468), sleeper: new THREE.Color(0x4a3526), rail: new THREE.Color(0xb9bec4) };
 const TINT = { dry: new THREE.Color(1.08, 1.04, 0.84), lush: new THREE.Color(0.86, 1.0, 0.86), forest: new THREE.Color(0.68, 0.8, 0.64), wet: new THREE.Color(0.78, 0.82, 0.84) };
 
 /* ------------------------------------------------------------------ */
@@ -116,7 +116,7 @@ function lodPrims(name) {
 /*  Terrain                                                            */
 /* ------------------------------------------------------------------ */
 export class Terrain {
-  constructor(scene, seed, { isRoad, isBlocked }) {
+  constructor(scene, seed, { isRoad, isRail = () => false, isBlocked }) {
     this.scene = scene;
     this.seed = seed;
     this.n1 = makeNoise2D(seed);
@@ -125,6 +125,7 @@ export class Terrain {
     this.n4 = makeNoise2D(seed + 3);
     this.n5 = makeNoise2D(seed + 4);
     this.isRoad = isRoad;
+    this.isRail = isRail;
     this.isBlocked = isBlocked;
     this.overrides = new Map();   // corner key -> height (flattened for buildings)
     this.cleared = new Set();     // tiles whose natural trees were removed
@@ -375,9 +376,35 @@ export class Terrain {
     const pushM = (pt, c) => { mpos.push(...pt); mcol.push(c.r, c.g, c.b); };
     const quad = (p1, p2, p3, p4, c) => { pushM(p1, c); pushM(p2, c); pushM(p3, c); pushM(p1, c); pushM(p3, c); pushM(p4, c); };
     const up = new THREE.Vector3(0, 1, 0);
+    // railway: ballast bed, timber sleepers every 60 cm and two steel rails (1.435 m gauge)
+    const drawRail = (i, j) => {
+      const cx = (i + 0.5) * T, cz = (j + 0.5) * T;
+      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => this.isRail(i + di, j + dj));
+      if (!dirs.length) dirs.push([1, 0], [-1, 0]);
+      const onRoad = this.isRoad(i, j);
+      for (const [di, dj] of dirs) {
+        const ex = cx + di * T / 2, ez = cz + dj * T / 2;
+        const nx = -dj, nz = di; // across the track
+        const strip = (w, h, c, from = 0, to = 1) => {
+          const ax = cx + (ex - cx) * from, az = cz + (ez - cz) * from, bx = cx + (ex - cx) * to, bz = cz + (ez - cz) * to;
+          quad(P(ax - nx * w, az - nz * w, h), P(ax + nx * w, az + nz * w, h), P(bx + nx * w, bz + nz * w, h), P(bx - nx * w, bz - nz * w, h), c);
+        };
+        // keep quads counter-clockwise from above whatever the direction
+        const flip = false; // the across-track normal already turns with the direction, so winding stays counter-clockwise
+        const q = (w, h, c, f = 0, t = 1) => (flip ? strip(-w, h, c, f, t) : strip(w, h, c, f, t));
+        if (!onRoad) q(0.36, 0.0, COL.ballast, -0.36, 1);
+        for (let k = 0; k < 9; k++) q(0.27, 0.025, COL.sleeper, k / 9 + 0.01, k / 9 + 0.05);
+        for (const side of [-0.1435, 0.1435]) {
+          const ox = nx * side, oz = nz * side;
+          const ax = cx + ox, az = cz + oz, bx = ex + ox, bz = ez + oz, w = 0.014 * (flip ? -1 : 1);
+          quad(P(ax - nx * w, az - nz * w, 0.06), P(ax + nx * w, az + nz * w, 0.06), P(bx + nx * w, bz + nz * w, 0.06), P(bx - nx * w, bz - nz * w, 0.06), COL.rail);
+        }
+      }
+    };
     for (let a = 0; a < CHUNK; a++) {
       for (let b = 0; b < CHUNK; b++) {
         const i = i0 + a, j = j0 + b;
+        if (this.isRail(i, j)) drawRail(i, j);
         if (!this.isRoad(i, j)) continue;
         const x0 = i * T, z0 = j * T, x1 = x0 + T, z1 = z0 + T, cx = x0 + T / 2, cz = z0 + T / 2;
         const ha = this.cornerH(i, j) + lift, hb = this.cornerH(i + 1, j) + lift, hc = this.cornerH(i, j + 1) + lift, hd = this.cornerH(i + 1, j + 1) + lift;

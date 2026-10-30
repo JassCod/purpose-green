@@ -9,6 +9,7 @@ export const MODEL_LIST = {
   restaurant: 3, bank: 1, university: 1, yard: 1,
   car: 1, hatch: 1, suv: 1, taxi: 1, policecar: 1, ambulance: 1, firetruck: 1, bus: 1, truck: 1,
   person_m: 1, person_f: 1, streetlight: 1,
+  station: 1, locomotive: 1, carriage: 1, airport: 1, plane: 1, port: 1, cargo_ship: 1, ferry: 1, sailboat: 1,
 };
 
 /* Shared materials that the game animates (night lights, power state). */
@@ -22,7 +23,7 @@ export const shared = {
   taillight: new THREE.MeshStandardMaterial({ name: 'TailLight', color: 0x8a0505, emissive: 0xff1508, emissiveIntensity: 0.5 }),
 };
 
-const PART_RE = /^(Rotor|Wheel\d|LegL|LegR|ArmL|ArmR)/;
+const PART_RE = /^(Rotor|Wheel\d|Prop\d|LegL|LegR|ArmL|ArmR)/;
 const templates = new Map();
 const materialCache = new Map();
 export const getTemplate = (name) => templates.get(name);

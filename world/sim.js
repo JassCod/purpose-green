@@ -14,6 +14,7 @@ export const CATS = [
   { id: 'power', name: 'Power', icon: '⚡' },
   { id: 'water', name: 'Water', icon: '💧' },
   { id: 'services', name: 'Services', icon: '🏥' },
+  { id: 'transport', name: 'Transport', icon: '🚆' },
   { id: 'nature', name: 'Nature', icon: '🌳' },
 ];
 
@@ -39,6 +40,10 @@ export const DEFS = {
   restaurant:{ cat: 'work', name: 'Restaurant', icon: '🍽️', size: 1, cost: 900, jobs: 7, wage: 35, power: 2, water: 2, foodUse: 10, profit: 200, radius: 12, desc: 'Chefs, cooks and waiters feed the neighbourhood (uses food).' },
   bank:      { cat: 'work', name: 'Bank', icon: '🏦', size: 1, cost: 2200, jobs: 9, wage: 85, power: 2, water: 1, profit: 320, educated: true, desc: 'Tellers, advisers and managers. Lifts tax income.' },
   university:{ cat: 'services', name: 'University', icon: '🎓', size: 2, cost: 7000, upkeep: 260, jobs: 16, wage: 95, power: 6, water: 3, radius: 30, desc: 'Gives adults degrees (needed for doctors, engineers, lawyers…).' },
+  rail:      { cat: 'transport', name: 'Railway', icon: '🛤️', size: 1, cost: 40, upkeep: 0.8, desc: 'Track for trains. Can cross roads (level crossing). Max ~5% grade.' },
+  station:   { cat: 'transport', name: 'Train station', icon: '🚉', size: 2, cost: 4500, upkeep: 120, jobs: 8, wage: 55, power: 3, water: 1, nearRail: true, profit: 200, desc: 'Trains link districts: people can commute to jobs along the line.' },
+  port:      { cat: 'transport', name: 'Seaport', icon: '⚓', size: 4, cost: 14000, upkeep: 280, jobs: 30, wage: 60, power: 8, water: 2, nearWater: true, profit: 900, desc: 'Cargo ships and ferries. Imports become 40% cheaper.' },
+  airport:   { cat: 'transport', name: 'Airport', icon: '✈️', size: 8, cost: 30000, upkeep: 500, jobs: 40, wage: 80, power: 20, water: 8, profit: 2600, poll: 3, desc: 'Flights bring tourists and business. Needs 80 × 80 m of flat land. Noisy.' },
   yard:      { cat: 'work', name: 'Construction yard', icon: '🏗️', size: 2, cost: 1800, jobs: 14, wage: 50, power: 2, water: 1, profit: 150, desc: 'Builders, crane operators, electricians: construction goes much faster.' },
 };
 export const TOOLS = {
@@ -76,6 +81,9 @@ export const OCCUPATIONS = {
   fire: [['Firefighter', 12, U.fire], ['Fire captain', 12, U.fire]],
   yard: [['Construction worker', 0, U.hivis], ['Crane operator', 12, U.hivis], ['Electrician', 12, U.hivis], ['Plumber', 0, U.overall], ['Carpenter', 0, U.hivis], ['Site manager', 16, U.suit]],
   park: [['Gardener', 0, U.green]],
+  station: [['Train driver', 12, U.navy], ['Conductor', 12, U.navy], ['Station master', 16, U.suit], ['Ticket clerk', 0, U.navy], ['Track engineer', 12, U.hivis]],
+  airport: [['Pilot', 16, U.navy], ['Co-pilot', 16, U.navy], ['Flight attendant', 12, U.navy], ['Air traffic controller', 16], ['Baggage handler', 0, U.hivis], ['Aircraft mechanic', 12, U.overall], ['Security officer', 0, U.police]],
+  port: [['Dock worker', 0, U.hivis], ['Crane operator', 12, U.hivis], ['Ship captain', 16, U.navy], ['Sailor', 0, U.navy], ['Customs officer', 12, U.police], ['Harbour master', 16, U.suit]],
 };
 function pickOccupation(c, type) {
   const list = (OCCUPATIONS[type] || []).filter(([, min]) => c.edu >= min);
@@ -124,6 +132,7 @@ export const G = {
   history: [],
   pollution: new Map(),
   netDirty: true,
+  linkComp: (c) => c,
   immAcc: 0,
   ledger: { income: 0, upkeep: 0, imports: 0, taxes: 0 },
   lastDay: null,
@@ -157,6 +166,7 @@ export const cloudFactor = () => ({ sun: 1, cloudy: 0.55, rain: 0.35, storm: 0.2
 /*  Tiles & placement                                                  */
 /* ------------------------------------------------------------------ */
 export const isRoad = (i, j) => G.tiles.get(tkey(i, j))?.road === true;
+export const isRail = (i, j) => G.tiles.get(tkey(i, j))?.rail === true;
 export const tileAt = (i, j) => G.tiles.get(tkey(i, j));
 export const buildingAt = (i, j) => { const t = tileAt(i, j); return t && t.b ? G.buildings.get(t.b) : null; };
 
@@ -176,10 +186,19 @@ export function canPlace(type, i, j) {
   }
   const size = d.size;
   for (const [a, b] of footprint(i, j, size)) {
-    if (tileAt(a, b)) return { ok: false, reason: 'Something is already built here' };
+    const t = tileAt(a, b);
+    // roads and railways may cross each other at a level crossing
+    const crossing = t && !t.b && ((type === 'rail' && t.road && !t.rail) || (type === 'road' && t.rail && !t.road));
+    if (t && !crossing) return { ok: false, reason: 'Something is already built here' };
     const s = terrain.tileStats(a, b);
     if (s.avg < 0.15 || s.min < -0.05) return { ok: false, reason: "Can't build on water" };
-    if (s.max - s.min > (type === 'road' ? 0.7 : 0.9)) return { ok: false, reason: type === 'road' ? 'Too steep for a road (max ~30% grade)' : 'Too steep — find flatter ground' };
+    const maxSlope = type === 'road' ? 0.7 : type === 'rail' ? 0.5 : 0.9;
+    if (s.max - s.min > maxSlope) return { ok: false, reason: type === 'road' ? 'Too steep for a road (max ~30% grade)' : type === 'rail' ? 'Too steep for a railway' : 'Too steep — find flatter ground' };
+  }
+  if (d.nearRail) {
+    let near = false;
+    for (let a = i - 1; a <= i + size && !near; a++) for (let b = j - 1; b <= j + size && !near; b++) if (isRail(a, b)) near = true;
+    if (!near) return { ok: false, reason: 'Must be next to a railway' };
   }
   if (d.nearWater) {
     let near = false;
@@ -189,10 +208,23 @@ export function canPlace(type, i, j) {
   return { ok: true };
 }
 
+export function placeRail(i, j) {
+  if (!canPlace('rail', i, j).ok) return false;
+  G.money -= DEFS.rail.cost;
+  const k = tkey(i, j);
+  G.tiles.set(k, { ...(G.tiles.get(k) || {}), rail: true });
+  G.railCount = (G.railCount || 0) + 1;
+  terrain.cleared.add(k);
+  G.netDirty = true;
+  railPathCache.clear();
+  terrain.markDirty(i - 1, j - 1, i + 1, j + 1);
+  return true;
+}
+
 export function placeRoad(i, j) {
   if (!canPlace('road', i, j).ok) return false;
   G.money -= DEFS.road.cost;
-  G.tiles.set(tkey(i, j), { road: true });
+  G.tiles.set(tkey(i, j), { ...(G.tiles.get(tkey(i, j)) || {}), road: true });
   G.roadCount++;
   terrain.cleared.add(tkey(i, j));
   G.netDirty = true;
@@ -246,6 +278,15 @@ export function removeBuilding(b, reason = 'bulldozed') {
 
 export function bulldoze(i, j) {
   const t = tileAt(i, j);
+  if (t?.rail) {
+    if (t.road) delete t.rail; else G.tiles.delete(tkey(i, j));
+    G.railCount--;
+    G.money += DEFS.rail.cost * 0.25;
+    G.netDirty = true;
+    railPathCache.clear();
+    terrain.markDirty(i - 1, j - 1, i + 1, j + 1);
+    return 'rail';
+  }
   if (t?.road) {
     G.tiles.delete(tkey(i, j));
     G.roadCount--;
@@ -308,7 +349,62 @@ function rebuildNetworks() {
     b.comp = adj.length ? roadComp.get(tkey(adj[0][0], adj[0][1])) : null;
     b.road = adj.length ? adj[0] : null;
   }
+  // railways: stations on the same line join their road networks for commuting
+  const railComp = new Map();
+  let rc = 0;
+  for (const [k, t] of G.tiles) {
+    if (!t.rail || railComp.has(k)) continue;
+    rc++;
+    const stack = [k];
+    railComp.set(k, rc);
+    while (stack.length) {
+      const [i, j] = stack.pop().split(',').map(Number);
+      for (const [di, dj] of N4) {
+        const nk = tkey(i + di, j + dj);
+        if (!railComp.has(nk) && G.tiles.get(nk)?.rail) { railComp.set(nk, rc); stack.push(nk); }
+      }
+    }
+  }
+  const parent = new Map();
+  const find = (x) => { while (parent.has(x) && parent.get(x) !== x) x = parent.get(x); return x; };
+  const lineFirst = new Map();
+  for (const b of G.buildings.values()) {
+    b.rail = null;
+    if (b.type !== 'station' || b.progress < 1) continue;
+    for (let a = b.i - 1; a <= b.i + b.size && !b.rail; a++) for (let c = b.j - 1; c <= b.j + b.size && !b.rail; c++) if (isRail(a, c)) b.rail = [a, c];
+    if (!b.rail || b.comp == null) continue;
+    const line = railComp.get(tkey(...b.rail));
+    b.line = line;
+    if (!lineFirst.has(line)) lineFirst.set(line, b.comp);
+    else { const r1 = find(lineFirst.get(line)), r2 = find(b.comp); if (r1 !== r2) parent.set(r2, r1); }
+  }
+  G.linkComp = (c) => (c == null ? c : find(c));
   G.netDirty = false;
+}
+
+export const railPathCache = new Map();
+/** BFS along railway tiles between two track tiles. */
+export function findRailPath(from, to, maxNodes = 8000) {
+  const fk = tkey(...from), tk = tkey(...to), ck = fk + '>' + tk;
+  if (railPathCache.has(ck)) return railPathCache.get(ck);
+  const prev = new Map([[fk, null]]);
+  const q = [from];
+  let head = 0, found = fk === tk;
+  while (!found && head < q.length && head < maxNodes) {
+    const [i, j] = q[head++];
+    for (const [di, dj] of N4) {
+      const ni = i + di, nj = j + dj, nk = tkey(ni, nj);
+      if (prev.has(nk) || !isRail(ni, nj)) continue;
+      prev.set(nk, tkey(i, j));
+      if (nk === tk) { found = true; break; }
+      q.push([ni, nj]);
+    }
+  }
+  let path = null;
+  if (found) { path = []; for (let k = tk; k; k = prev.get(k)) path.push(k.split(',').map(Number)); path.reverse(); }
+  if (railPathCache.size > 300) railPathCache.clear();
+  railPathCache.set(ck, path);
+  return path;
 }
 
 export const pathCache = new Map();
@@ -530,11 +626,11 @@ function hourly(hAbs) {
   G.hungry = false;
   G.shopsStarved = false;
   if (G.food < 0) {
-    if (G.imports) { const cost = -G.food * 3; G.money -= cost; G.ledger.imports += cost; G.food = 0; }
+    if (G.imports) { const cost = -G.food * 3 * portDiscount(); G.money -= cost; G.ledger.imports += cost; G.food = 0; }
     else { G.food = 0; G.hungry = pop > 0; }
   }
   if (G.goods < 0) {
-    if (G.imports) { const cost = -G.goods * 4; G.money -= cost; G.ledger.imports += cost; G.goods = 0; }
+    if (G.imports) { const cost = -G.goods * 4 * portDiscount(); G.money -= cost; G.ledger.imports += cost; G.goods = 0; }
     else { G.goods = 0; G.shopsStarved = true; }
   }
   G.foodRate = (foodMade - pop / 24) * 24;
@@ -559,7 +655,8 @@ function hourly(hAbs) {
   for (const b of bl) {
     const d = DEFS[b.type];
     if (!d.jobs || b.progress < 1 || b.comp == null) continue;
-    if (b.workers.size < d.jobs) { if (!openings.has(b.comp)) openings.set(b.comp, []); openings.get(b.comp).push(b); }
+    const jc = G.linkComp(b.comp);
+    if (b.workers.size < d.jobs) { if (!openings.has(jc)) openings.set(jc, []); openings.get(jc).push(b); }
   }
   let assigned = 0;
   for (const c of G.citizens.values()) {
@@ -569,7 +666,7 @@ function hourly(hAbs) {
     }
     if (!isAdult(c) || c.home == null || assigned > 300) continue;
     const home = G.buildings.get(c.home);
-    const list = home && openings.get(home.comp);
+    const list = home && openings.get(G.linkComp(home.comp));
     if (!list || !list.length) continue;
     let best = null, bd = Infinity;
     for (const w of list) {
@@ -679,6 +776,11 @@ function hourly(hAbs) {
   for (const b of bl) b.issues = issuesOf(b);
 }
 
+function portDiscount() {
+  for (const b of G.buildings.values()) if (b.type === 'port' && b.working) return 0.6;
+  return 1;
+}
+
 function findVacancy() {
   for (const b of G.buildings.values()) if (DEFS[b.type].homes && b.working && b.residents.size < DEFS[b.type].homes) return b;
   return null;
@@ -724,7 +826,7 @@ function daily() {
     if (d.homes) taxes += b.residents.size * 5 * (G.tax / 100); // property tax
     upkeep += d.upkeep || 0;
   }
-  upkeep += G.roadCount * DEFS.road.upkeep;
+  upkeep += G.roadCount * DEFS.road.upkeep + (G.railCount || 0) * DEFS.rail.upkeep;
   G.money += taxes - upkeep;
   G.lastDay = { taxes, upkeep, imports: G.ledger.imports, net: taxes - upkeep - G.ledger.imports };
   G.ledger.imports = 0;
@@ -859,6 +961,7 @@ export function serialize() {
     v: 1, seed: G.seed, money: G.money, t: G.t, tax: G.tax, imports: G.imports, nextId: G.nextId,
     food: G.food, goods: G.goods, streetGarbage: G.streetGarbage, weather: G.weather, history: G.history,
     roads: [...G.tiles].filter(([, t]) => t.road).map(([k]) => k),
+    rails: [...G.tiles].filter(([, t]) => t.rail).map(([k]) => k),
     buildings: [...G.buildings.values()].map((b) => [b.id, b.type, b.i, b.j, b.rot, b.variant, +b.progress.toFixed(3), Math.round(b.fill), b.fire]),
     citizens: [...G.citizens.values()].map((c) => [c.id, c.name, c.age, c.home, c.job, c.edu, Math.round(c.health), Math.round(c.happy), c.sick ? 1 : 0, c.female ? 1 : 0, c.occ || '']),
     nature: nature.serializeNature(),
@@ -877,6 +980,7 @@ export function restore(data) {
   data.cleared.forEach((k) => terrain.cleared.add(k));
   data.planted.forEach((k) => terrain.planted.add(k));
   for (const k of data.roads) { G.tiles.set(k, { road: true }); G.roadCount++; }
+  for (const k of data.rails || []) { G.tiles.set(k, { ...(G.tiles.get(k) || {}), rail: true }); G.railCount = (G.railCount || 0) + 1; }
   for (const [id, type, i, j, rot, variant, progress, fill, fire] of data.buildings) {
     placeBuilding(type, i, j, rot, { free: true, id, variant, progress, fill, fire });
   }

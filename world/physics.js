@@ -78,7 +78,7 @@ export class Physics {
     const keep = new Set();
     for (const b of G.buildings.values()) {
       const cx = (b.i + b.size / 2) * T, cz = (b.j + b.size / 2) * T;
-      if (Math.abs(cx - fx) > R || Math.abs(cz - fz) > R || b.type === 'park') continue;
+      if (Math.abs(cx - fx) > R || Math.abs(cz - fz) > R || ['park', 'airport', 'port', 'yard', 'farm'].includes(b.type)) continue;
       const key = `b${b.id}:${b.progress >= 1 ? 1 : 0}`;
       keep.add(key);
       if (this.statics.has(key)) continue;

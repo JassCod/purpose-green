@@ -1077,6 +1077,256 @@ def truck(m):
     export(b, "truck")
 
 
+# ---------------------------------------------------------------- transport: rail, air, sea
+def extrude_top(b, pts, z0, z1, mat):
+    """Extrude a top-view outline [(x, y), ...] vertically from z0 to z1 (hulls, platforms)."""
+    lo = [b.bm.verts.new((x, y, z0)) for x, y in pts]
+    hi = [b.bm.verts.new((x, y, z1)) for x, y in pts]
+    faces = [b.bm.faces.new(lo), b.bm.faces.new(list(reversed(hi)))]
+    n = len(pts)
+    for k in range(n):
+        faces.append(b.bm.faces.new((lo[k], lo[(k + 1) % n], hi[(k + 1) % n], hi[k])))
+    bmesh.ops.recalc_face_normals(b.bm, faces=faces)
+    idx = b.mi(mat)
+    for f in faces:
+        f.material_index = idx
+    return lo + hi
+
+
+def station(m):
+    b = Builder("station")
+    b.ground(19.6, 19.6, m["concrete"], z=0.03)
+    b.box(19.6, 4.2, 1.05, 0, -7.7, 0, m["concrete"])  # platform at rail height
+    b.box(19.6, 0.4, 0.02, 0, -9.55, 1.05, m["yellow"])  # stand-behind line
+    for x in range(-8, 9, 4):
+        b.cyl(0.12, 0.12, 3.6, x, -7.0, 1.05, m["dark_steel"], seg=8)
+    b.box(19.4, 4.6, 0.18, 0, -7.6, 4.65, m["metal_b"], rx=0.05)
+    for x in (-5, 0, 5):
+        b.box(1.6, 0.45, 0.08, x, -6.6, 1.5, m["wood"])
+        b.box(0.08, 0.4, 0.45, x - 0.75, -6.6, 1.05, m["dark_steel"])
+        b.box(0.08, 0.4, 0.45, x + 0.75, -6.6, 1.05, m["dark_steel"])
+    b.box(1.2, 0.1, 0.6, 7.5, -5.8, 3.6, m["black"])  # departure board
+    b.box(13, 7, 6.2, 0, 3.0, 0, m["brick"], bevel=0.03)
+    b.gable_roof(13, 7, 2.6, 0, 3.0, 6.2, m["roof_s"], m["brick"])
+    for x in (-4.5, -2.0, 2.0, 4.5):
+        b.window(1.3, 2.2, x, -0.5, 1.0, "-y", m)
+    b.box(2.2, 0.12, 2.8, 0, -0.52, 0, m["window"])
+    face = material("ClockFace", None, (0.95, 0.94, 0.88), rough=0.4)
+    b.cyl(0.7, 0.7, 0.08, 0, -0.55, 4.9, face, seg=20, rx=math.pi / 2, center=True)
+    b.text("STATION", 0.7, 0, -0.56, 3.7, m["trim"], depth=0.04)
+    export(b, "station")
+
+
+def locomotive(m):
+    b = Builder("locomotive")
+    W = 2.9
+    side = [(-8.5, 1.2), (-8.5, 2.6), (-7.6, 4.1), (8.5, 4.2), (8.5, 1.2)]
+    extrude_profile(b, side, W, m["paint"])
+    extrude_profile(b, [(-8.4, 2.75), (-7.75, 3.85), (-6.6, 3.85), (-6.6, 2.75)], W + 0.02, m["glass"])
+    b.quad([(-1.2, -8.55, 2.75), (1.2, -8.55, 2.75), (1.2, -7.8, 3.9), (-1.2, -7.8, 3.9)][::-1], m["glass"])
+    b.box(W + 0.03, 15.5, 0.35, 0, 0.5, 1.6, m["yellow"])  # livery stripe
+    for k in range(6):
+        b.box(0.04, 1.4, 1.0, W / 2 + 0.02, -4 + k * 2.2, 2.6, m["metal"])
+        b.box(0.04, 1.4, 1.0, -W / 2 - 0.02, -4 + k * 2.2, 2.6, m["metal"])
+    for x in (-0.9, 0.9):
+        b.box(0.35, 0.06, 0.22, x, -8.55, 1.8, m["head"])
+    b.box(1.6, 1.4, 0.4, 0, 2, 4.2, m["dark_steel"])  # roof equipment
+    for y in (-5.5, 5.5):  # bogies with wheels
+        b.box(2.4, 3.6, 0.7, 0, y, 0.45, m["dark_steel"])
+        for dy in (-1.1, 1.1):
+            for x in (-0.75, 0.75):
+                b.cyl(0.5, 0.5, 0.15, x, y + dy, 0.5, m["steel"], seg=14, ry=math.pi / 2, center=True)
+    b.box(2.6, 0.4, 0.5, 0, -8.55, 0.9, m["dark_steel"])
+    export(b, "locomotive")
+
+
+def carriage(m):
+    b = Builder("carriage")
+    W, L = 2.9, 20.0
+    b.box(W, L, 2.9, 0, 0, 1.2, m["paint"], bevel=0.12)
+    vs = b.cyl(W / 2, W / 2, L - 0.2, 0, 0, 4.1, m["white"], seg=16, rx=math.pi / 2, center=True)
+    for v in vs:  # flatten the roof arc
+        v.co.z = 4.1 + (v.co.z - 4.1) * 0.28
+    for side in (-1, 1):
+        b.box(0.03, L - 3, 0.9, side * (W / 2 + 0.01), 0, 2.55, m["glass"])
+        for y in (-L / 2 + 1.4, L / 2 - 1.4):
+            b.box(0.04, 1.2, 2.2, side * (W / 2 + 0.02), y, 1.25, m["metal"])
+        b.box(0.03, L - 0.6, 0.18, side * (W / 2 + 0.01), 0, 1.9, m["yellow"])
+    for y in (-7.0, 7.0):
+        b.box(2.4, 3.0, 0.7, 0, y, 0.45, m["dark_steel"])
+        for dy in (-0.9, 0.9):
+            for x in (-0.75, 0.75):
+                b.cyl(0.45, 0.45, 0.15, x, y + dy, 0.45, m["steel"], seg=14, ry=math.pi / 2, center=True)
+    export(b, "carriage")
+
+
+def airport(m):
+    """A regional airfield on an 80 x 80 m plot: runway along X at the back, apron and terminal at the front."""
+    b = Builder("airport")
+    b.ground(79.6, 79.6, m["grass"], z=0.03)
+    b.box(76, 12, 0.06, 0, 18, 0.0, m["asphalt"])
+    for k in range(14):  # centre line
+        b.box(2.6, 0.3, 0.02, -32 + k * 5, 18, 0.06, m["white"])
+    for end in (-1, 1):  # threshold piano keys and runway numbers
+        for k in range(8):
+            b.box(2.8, 0.6, 0.02, end * 34, 13.4 + k * 1.3, 0.06, m["white"])
+        for k in range(10):
+            b.cyl(0.12, 0.12, 0.25, end * (37 - k * 0.0) if False else -36 + k * 8, 18 + end * 6.3, 0.05, m["lamp"], seg=6)
+    b.box(6, 22, 0.05, 30, 3, 0.01, m["asphalt"])  # taxiway
+    b.box(48, 18, 0.05, 0, -12, 0.0, m["concrete"])  # apron
+    for x in (-12, 0, 12):
+        b.box(0.25, 14, 0.02, x, -12, 0.06, m["yellow"])
+    # terminal
+    b.box(44, 10, 7.5, 0, -30, 0, m["window"])
+    for x in range(-22, 23, 4):
+        b.box(0.25, 0.25, 7.5, x, -25, 0, m["steel"])
+    b.box(46, 12, 0.6, 0, -30, 7.5, m["white"])
+    b.box(12, 3, 1.2, 0, -24.5, 6.6, m["white"])
+    b.text("AIRPORT", 1.6, 0, -35.06, 5.8, m["blue"], depth=0.08)
+    # control tower
+    b.cyl(2.0, 2.4, 26, -32, -10, 0, m["concrete"], seg=18)
+    b.cyl(4.0, 3.2, 1.0, -32, -10, 26, m["white"], seg=18)
+    b.cyl(3.8, 3.8, 3.0, -32, -10, 27, m["window"], seg=18)
+    b.cyl(4.2, 4.2, 0.5, -32, -10, 30, m["dark_steel"], seg=18)
+    b.cyl(0.06, 0.06, 4, -32, -10, 30.5, m["steel"], seg=6)
+    # arched hangar
+    vs = b.cyl(8, 8, 18, -18, 2, 0, m["metal"], seg=24, rx=math.pi / 2, center=True)
+    for v in vs:
+        if v.co.z < 0:
+            v.co.z = 0
+    b.box(15.8, 0.1, 7.6, -18, -7.0, 0, m["metal_b"])
+    # windsock
+    b.cyl(0.1, 0.1, 8, 36, 4, 0, m["steel"], seg=6)
+    hivis = material("HiVis", None, (1.0, 0.45, 0.02), rough=0.5)
+    b.cyl(0.6, 0.3, 3, 36, 2.6, 7.6, hivis, seg=10, rx=math.pi / 2, center=True)
+    export(b, "airport")
+
+
+def plane(m):
+    """A high-wing regional turboprop (~22 m long, 26 m span). Front = -Y. Props spin."""
+    b = Builder("plane")
+    body = material("Fuselage", None, (0.95, 0.95, 0.96), rough=0.35, metal=0.2)
+    b.cyl(1.35, 1.35, 15, 0, 0, 2.6, body, seg=20, rx=math.pi / 2, center=True)
+    b.sphere(1.35, 0, -7.5, 2.6, body, seg=20, sy=2.0)
+    vs = b.cyl(1.35, 0.35, 6.5, 0, 10.7, 2.6, body, seg=20, rx=-math.pi / 2, center=True)
+    for v in vs:  # tail sweeps up
+        if v.co.y > 9:
+            v.co.z += (v.co.y - 9) * 0.25
+    b.box(2.0, 0.6, 0.5, 0, -8.7, 3.2, m["glass"], rx=0.4)
+    for k in range(13):  # cabin windows
+        for side in (-1, 1):
+            b.box(0.05, 0.35, 0.45, side * 1.33, -5.2 + k * 0.95, 3.0, m["glass"])
+    b.box(2.74, 22.0, 0.35, 0, 1.5, 1.9, m["paint"]) if False else None
+    for side in (-1, 1):
+        b.box(0.03, 17.5, 0.28, side * 1.36, 0.8, 2.2, m["paint"])  # livery stripe
+    b.box(26, 2.6, 0.35, 0, -0.5, 3.9, body, bevel=0.1)  # high wing
+    vs = b.box(0.35, 4.2, 4.6, 0, 11.8, 3.6, body)  # fin
+    for v in vs:
+        if v.co.z > 5:
+            v.co.y += 1.4
+    b.box(8.5, 1.8, 0.25, 0, 13.4, 8.1, body)  # T-tail stabiliser
+    for x in (-4.3, 4.3):
+        b.cyl(0.6, 0.5, 4.0, x, -1.2, 3.6, body, seg=12, rx=math.pi / 2, center=True)
+        b.box(0.3, 0.3, 1.6, x, 0.5, 1.0, m["dark_steel"])
+        b.cyl(0.4, 0.4, 0.3, x, 0.5, 0.4, m["rubber"], seg=12, ry=math.pi / 2, center=True)
+
+        def prop(r):
+            r.sphere(0.35, 0, 0, 0, m["dark_steel"], seg=10, sy=1.4)
+            for k in range(6):
+                vs2 = r.box(0.22, 0.05, 1.7, 0, 0, 0.2, m["black"])
+                bmesh.ops.transform(r.bm, matrix=Matrix.Rotation(k / 6 * math.tau, 4, "Y"), verts=vs2)
+        b.sub("Prop0" if x < 0 else "Prop1", prop, (x, -3.35, 3.6))
+    b.box(0.2, 0.2, 1.4, 0, -6.2, 1.0, m["dark_steel"])
+    b.cyl(0.3, 0.3, 0.25, 0, -6.2, 0.3, m["rubber"], seg=10, ry=math.pi / 2, center=True)
+    export(b, "plane")
+
+
+def port(m):
+    """A container port on a 40 x 40 m plot; the quay (front, -Y) faces the water."""
+    b = Builder("port")
+    b.ground(39.6, 39.6, m["concrete"], z=0.03)
+    b.box(39.6, 1.0, 1.2, 0, -19.5, -1.0, m["concrete"])  # quay wall
+    for x in range(-18, 19, 4):
+        b.cyl(0.25, 0.3, 0.6, x, -18.8, 0.0, m["dark_steel"], seg=8)  # bollards
+    cols = [material(f"Container{k}", None, c, rough=0.6) for k, c in enumerate([(0.6, 0.1, 0.08), (0.05, 0.25, 0.55), (0.1, 0.45, 0.2), (0.8, 0.55, 0.05), (0.5, 0.5, 0.5)])]
+    rnd = random.Random(5)
+    for r_ in range(3):
+        for c_ in range(5):
+            h = rnd.randint(1, 4)
+            for k in range(h):
+                b.box(6.0, 2.4, 2.55, -14 + c_ * 7, -4 + r_ * 3.0, k * 2.6, cols[rnd.randint(0, 4)], bevel=0.04)
+    # ship-to-shore gantry crane overhanging the water
+    blue = m["blue"]
+    for x in (-6, 6):
+        for y in (-17, -9):
+            b.box(0.9, 0.9, 26, x, y, 0, blue)
+    b.box(13, 0.9, 1.2, 0, -17, 18, blue)
+    b.box(13, 0.9, 1.2, 0, -9, 18, blue)
+    b.box(3.0, 40, 1.6, 0, -18, 26, blue)
+    b.box(3.4, 3.4, 2.6, 0, -16, 23.4, m["white"])
+    b.cyl(0.04, 0.04, 14, 0, -28, 12, m["dark_steel"], seg=4)
+    b.box(6.2, 2.6, 0.6, 0, -28, 11.4, m["yellow"])
+    b.box(18, 10, 9, 8, 12, 0, m["metal"], bevel=0.05)
+    b.text("PORT", 2.0, 8, 6.95, 6.0, m["trim"], depth=0.08)
+    b.box(6, 6, 7, -12, 13, 0, m["plaster_w"])
+    for x in (-13.5, -10.5):
+        b.window(1.6, 1.6, x, 9.95, 3.5, "-y", m)
+    export(b, "port")
+
+
+def cargo_ship(m):
+    b = Builder("cargo_ship")
+    hull = [(0, -26), (2.8, -21), (5.0, -14), (5.2, 18), (4.5, 22), (-4.5, 22), (-5.2, 18), (-5.0, -14), (-2.8, -21)]
+    anti = material("Antifouling", None, (0.45, 0.06, 0.05), rough=0.7)
+    extrude_top(b, hull, -3.0, 0.0, anti)
+    extrude_top(b, hull, 0.0, 3.2, m["paint"])
+    extrude_top(b, [(x * 0.96, y * 0.98) for x, y in hull], 3.2, 3.35, m["dark_steel"])
+    cols = [material(f"Container{k}", None, c, rough=0.6) for k, c in enumerate([(0.6, 0.1, 0.08), (0.05, 0.25, 0.55), (0.1, 0.45, 0.2), (0.8, 0.55, 0.05), (0.5, 0.5, 0.5)])]
+    rnd = random.Random(9)
+    for row in range(5):
+        for col in range(3):
+            for tier in range(rnd.randint(1, 3)):
+                b.box(2.9, 5.8, 2.55, -3.2 + col * 3.2, -16 + row * 6.2, 3.35 + tier * 2.6, cols[rnd.randint(0, 4)], bevel=0.03)
+    b.box(9.4, 6, 8, 0, 17, 3.35, m["white"], bevel=0.05)  # bridge
+    b.box(11, 2.5, 0.3, 0, 15.5, 11.2, m["white"])
+    for k in range(5):
+        b.box(1.4, 0.05, 1.0, -3.6 + k * 1.8, 13.98, 9.6, m["glass"])
+    b.cyl(1.0, 1.1, 4, 0, 20.5, 11.35, m["red"], seg=12)
+    b.emitter("Smoke", 0, 20.5, 15.6)
+    export(b, "cargo_ship")
+
+
+def ferry(m):
+    b = Builder("ferry")
+    hull = [(0, -17), (3.5, -12), (5.0, -6), (5.0, 15), (-5.0, 15), (-5.0, -6), (-3.5, -12)]
+    extrude_top(b, hull, -2.2, 0.0, m["blue"])
+    extrude_top(b, hull, 0.0, 2.6, m["white"])
+    extrude_top(b, [(x * 0.85, y * 0.82 + 1.5) for x, y in hull], 2.6, 5.2, m["white"])
+    extrude_top(b, [(x * 0.65, y * 0.5 + 4) for x, y in hull], 5.2, 7.4, m["white"])
+    for z, sc in ((3.4, 0.86), (5.9, 0.66)):
+        for side in (-1, 1):
+            b.box(0.04, 14 * sc + 4, 1.0, side * (5.0 * sc - 0.05 if sc < 0.8 else 4.27), 2.5, z, m["glass"])
+    b.box(10.06, 30, 0.5, 0, -0.5, 1.4, m["blue"])
+    b.text("FERRY", 1.0, 5.06, 2, 1.6, m["white"], depth=0.04, facing="+x")
+    b.cyl(0.7, 0.8, 2.6, 0, 9, 7.4, m["yellow"], seg=12)
+    b.emitter("Smoke", 0, 9, 10.2)
+    export(b, "ferry")
+
+
+def sailboat(m):
+    b = Builder("sailboat")
+    hull = [(0, -4.6), (1.3, -2.5), (1.6, 1.0), (1.2, 4.2), (-1.2, 4.2), (-1.6, 1.0), (-1.3, -2.5)]
+    extrude_top(b, hull, -0.7, 0.0, m["blue"])
+    extrude_top(b, hull, 0.0, 0.9, m["white"])
+    b.box(1.6, 2.2, 0.6, 0, 0.8, 0.9, m["white"], bevel=0.1)
+    b.cyl(0.07, 0.06, 11, 0, -1.0, 0.9, m["steel"], seg=8)
+    b.box(0.08, 4.2, 0.08, 0, 1.1, 2.2, m["steel"])
+    sail = material("Sail", None, (0.96, 0.95, 0.9), rough=0.8)
+    b.quad([(0, -0.95, 2.3), (0, 3.2, 2.3), (0, -0.95, 11.6), (0, -0.95, 11.6)], sail, double=True)
+    b.quad([(0, -1.1, 1.4), (0, -1.1, 10.5), (0, -4.4, 1.1), (0, -4.4, 1.1)], sail, double=True)
+    export(b, "sailboat")
+
+
 def car(m):
     passenger_car("car", m, "sedan")
     passenger_car("hatch", m, "hatch")
@@ -1321,6 +1571,7 @@ def main():
     for v in range(3):
         restaurant(v, m)
     bank(m); university(m); yard(m)
+    station(m); locomotive(m); carriage(m); airport(m); plane(m); port(m); cargo_ship(m); ferry(m); sailboat(m)
     car(m); truck(m); person(m); person(m, female=True); streetlight(m)
     print("done")
 

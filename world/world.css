@@ -115,6 +115,19 @@ aside header { display: flex; justify-content: space-between; align-items: cente
 .cursor-label:empty { display: none; }
 .cursor-label.bad { background: rgba(224,67,79,.95); }
 
+/* ---------- 360° view pad ---------- */
+.viewpad { position: absolute; right: 10px; bottom: 214px; display: grid; grid-template-columns: repeat(3, 32px); gap: 4px; padding: 6px; border-radius: 16px; }
+.viewpad button { width: 32px; height: 32px; border-radius: 10px; background: #eef5f0; font-weight: 800; font-size: .95rem; }
+.viewpad button:hover { background: #dff0e4; }
+.viewpad button.on { background: var(--green); color: #fff; }
+.viewpad .compass { grid-column: 1 / -1; width: 100%; position: relative; background: #15301f; color: #fff; }
+.viewpad .compass b { position: absolute; left: 8px; top: 7px; font-size: .7rem; color: var(--lime); }
+#compass-needle { display: inline-block; transform-origin: 50% 50%; color: #ff6b6b; transition: transform .08s linear; }
+.dronepad { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); display: grid; grid-template-columns: repeat(7, 46px); gap: 6px; pointer-events: auto !important; }
+.dronepad button { height: 46px; border-radius: 14px; background: rgba(255,255,255,.85); font-size: 1.1rem; font-weight: 800; box-shadow: var(--shadow); touch-action: none; }
+#hud.walking .dronepad { display: grid; }
+#hud.walking .dronepad.hidden { display: none !important; }
+
 /* ---------- minimap ---------- */
 .mapbox { position: absolute; right: 10px; bottom: 10px; padding: 6px; border-radius: 18px; }
 #minimap { display: block; width: 180px; height: 180px; border-radius: 13px; cursor: crosshair; }
@@ -149,7 +162,7 @@ input[type=range] { width: 100%; accent-color: var(--green); margin-top: 6px; }
 .row { display: flex; gap: 6px; margin-top: 8px; }
 
 .walk-hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 9px 16px; border-radius: 14px; background: rgba(21,48,31,.88); color: #fff; font-weight: 800; font-size: .84rem; white-space: nowrap; }
-#hud.walking > *:not(.walk-hint):not(.toasts):not(.feed) { display: none; }
+#hud.walking > *:not(.walk-hint):not(.toasts):not(.feed):not(.dronepad) { display: none; }
 #hud.walking::after { content: ""; position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.3); }
 
 /* ---------- title ---------- */
@@ -190,6 +203,8 @@ input[type=range] { width: 100%; accent-color: var(--green); margin-top: 6px; }
   .needs:not(.open) header { margin: 0; }
   .inspector { top: 58px; width: min(300px, calc(100vw - 20px)); max-height: 45vh; }
   .mapbox { bottom: 150px; }
+  .viewpad { bottom: 280px; grid-template-columns: repeat(3, 28px); }
+  .viewpad button { width: 28px; height: 28px; font-size: .8rem; }
   #minimap { width: 110px; height: 110px; }
   .map-btns { top: 6px; right: 6px; }
   .map-btns button { width: 26px; height: 26px; font-size: .8rem; }

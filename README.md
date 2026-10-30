@@ -39,8 +39,16 @@ Physically based sky (Rayleigh/Mie scattering) and image-based reflections, ACES
 - Emergency services respond to real events: fire engines drive to fires, ambulances to the sick, and police patrol.
 - Budget, taxes, imports, pollution, crime, fires, seasons and storms.
 
+### Transport
+- **Railways**: draw track like roads (it can cross roads at level crossings). Stations on the same line link their districts, so people can commute to jobs along the railway. Trains (a locomotive and three carriages) accelerate out of stations, brake smoothly into platforms and stop to board.
+- **Airports** (80 × 80 m): runway with markings and lights, terminal, control tower, hangar and windsock. Turboprops push back, taxi, take off, climb out, then return, land, roll out and park at the gate. Airliners cross the sky at cruising altitude.
+- **Seaports**: container cranes over the quay. Cargo ships and ferries find real routes through rivers, lakes and bays and dock to unload, which makes imports 40% cheaper. Sailboats roam the water and heel with the wind. Ice stops ships.
+- New jobs: train drivers, conductors, station masters, pilots, flight attendants, air-traffic controllers, aircraft mechanics, dock workers, ship captains, sailors and customs officers.
+
 ### Controls
 Drag to pan, right-drag or `Q`/`E` to rotate, scroll to zoom, `WASD` to pan. `F` walks around on foot (`Space` jumps, click throws a ball). `C` drives a car (`W`/`S` for gas and brake, `A`/`D` to steer, `Space` for the handbrake, `R` flips it back). Also: `R` rotates a building, `B` bulldozes, `H` hides the UI, `Space` pauses.
+
+**360° viewing**: the view pad above the minimap rotates (⟲ ⟳) and tilts (▲ ▼) the camera, the compass turns you back to north, 🔄 auto-orbits a full 360°, and 🛸 (or `G`) opens a free-flying drone camera (drag to look in any direction, `WASD` to fly, `E`/`Q` for up and down). On foot you can look straight up and down, and while driving you can drag to swing the camera all the way around the car.
 
 ## 🏝️ Island Lab (`island.html`)
 A small sandbox: build a floating eco-island and experiment with the sun, wind, rain and storms.

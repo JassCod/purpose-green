@@ -71,6 +71,21 @@
       <div class="coords" id="coords">0, 0</div>
     </div>
 
+    <!-- 360° view controls -->
+    <div class="viewpad panel" id="viewpad">
+      <button data-view="north" class="compass" title="Face north"><span id="compass-needle">➤</span><b>N</b></button>
+      <button data-view="left" title="Rotate left 45°">⟲</button>
+      <button data-view="up" title="Tilt up">▲</button>
+      <button data-view="right" title="Rotate right 45°">⟳</button>
+      <button data-view="down" title="Tilt down">▼</button>
+      <button data-view="spin" title="Auto-rotate 360°">🔄</button>
+      <button data-view="drone" title="Free 360° drone camera (G)">🛸</button>
+    </div>
+    <div class="dronepad hidden" id="dronepad">
+      <button data-key="w">▲</button><button data-key="a">◀</button><button data-key="s">▼</button><button data-key="d">▶</button>
+      <button data-key="e">⤒</button><button data-key="q">⤓</button><button id="drone-exit" title="Back to map">✕</button>
+    </div>
+
     <!-- build bar -->
     <nav class="build panel" id="build">
       <div class="cats" id="cats"></div>
@@ -113,7 +128,7 @@
       </div>
       <label class="seed">Seed <input id="t-seed" type="text" inputmode="numeric" maxlength="9" /></label>
       <div class="keys">
-        <span>Drag: move</span><span>Right-drag / <kbd>Q</kbd><kbd>E</kbd>: rotate</span><span>Scroll: zoom</span><span><kbd>WASD</kbd> pan</span><span><kbd>F</kbd> walk</span><span><kbd>C</kbd> drive</span><span><kbd>R</kbd> rotate building</span>
+        <span>Drag: move</span><span>Right-drag / <kbd>Q</kbd><kbd>E</kbd>: rotate</span><span>Scroll: zoom</span><span><kbd>WASD</kbd> pan</span><span><kbd>F</kbd> walk</span><span><kbd>C</kbd> drive</span><span><kbd>G</kbd> 360° drone</span><span><kbd>R</kbd> rotate building</span>
       </div>
       <a class="island-link" href="island.html">or play the small Island Lab →</a>
     </div>
