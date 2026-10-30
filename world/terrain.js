@@ -6,7 +6,7 @@ export const T = 2;          // world units per tile (1 unit = 5 m, so a tile is
 export const CHUNK = 16;     // tiles per chunk side
 export const WATER = 0;      // sea level
 export const METERS = 5;     // metres per world unit
-const VIEW_CHUNKS = 4;       // chunk radius kept loaded around the camera
+const VIEW_CHUNKS_DEFAULT = 4; // chunk radius kept loaded around the camera
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 export const tkey = (i, j) => `${i},${j}`;
@@ -116,7 +116,8 @@ function lodPrims(name) {
 /*  Terrain                                                            */
 /* ------------------------------------------------------------------ */
 export class Terrain {
-  constructor(scene, seed, { isRoad, isRail = () => false, isBlocked }) {
+  constructor(scene, seed, { isRoad, isRail = () => false, isBlocked, viewChunks = VIEW_CHUNKS_DEFAULT }) {
+    this.view = viewChunks;
     this.scene = scene;
     this.seed = seed;
     this.n1 = makeNoise2D(seed);
@@ -250,9 +251,10 @@ export class Terrain {
   update(x, z, budget = 2) {
     const cx = Math.floor(x / (T * CHUNK)), cz = Math.floor(z / (T * CHUNK));
     const want = [];
-    for (let a = -VIEW_CHUNKS; a <= VIEW_CHUNKS; a++) {
-      for (let b = -VIEW_CHUNKS; b <= VIEW_CHUNKS; b++) {
-        if (a * a + b * b > VIEW_CHUNKS * VIEW_CHUNKS + 2) continue;
+    const V = this.view;
+    for (let a = -V; a <= V; a++) {
+      for (let b = -V; b <= V; b++) {
+        if (a * a + b * b > V * V + 2) continue;
         const k = tkey(cx + a, cz + b);
         if (!this.chunks.has(k)) want.push([a * a + b * b, cx + a, cz + b]);
       }
@@ -269,7 +271,7 @@ export class Terrain {
     }
     for (const [k, ch] of this.chunks) {
       const dx = ch.ci - cx, dz = ch.cj - cz;
-      if (dx * dx + dz * dz > (VIEW_CHUNKS + 2) ** 2) { this.disposeChunk(ch); this.chunks.delete(k); this.layersDirty = true; }
+      if (dx * dx + dz * dz > (V + 2) ** 2) { this.disposeChunk(ch); this.chunks.delete(k); this.layersDirty = true; }
     }
     const fk = tkey(cx, cz);
     if (fk !== this.focusChunk) { this.focusChunk = fk; this.layersDirty = true; }

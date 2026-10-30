@@ -2,7 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#15301f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Purpose Green" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <title>Purpose Green — World</title>
   <meta name="description" content="An endless 3D city-builder: explore a procedurally generated world, build working infrastructure and keep simulated citizens alive and happy." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -60,7 +68,7 @@
     <div class="toasts" id="toasts"></div>
 
     <!-- minimap -->
-    <div class="mapbox panel">
+    <div class="mapbox panel" id="mapbox">
       <canvas id="minimap" width="180" height="180"></canvas>
       <div class="map-btns">
         <button id="b-walk" title="Walk around (F)">🚶</button>
@@ -84,6 +92,20 @@
     <div class="dronepad hidden" id="dronepad">
       <button data-key="w">▲</button><button data-key="a">◀</button><button data-key="s">▼</button><button data-key="d">▶</button>
       <button data-key="e">⤒</button><button data-key="q">⤓</button><button id="drone-exit" title="Back to map">✕</button>
+    </div>
+
+    <!-- mobile dock: open panels on demand -->
+    <div class="dock" id="dock">
+      <button data-panel="needs" title="City needs">📋<i id="dock-badge"></i></button>
+      <button data-panel="mapbox" title="Map & modes">🗺️</button>
+      <button data-panel="viewpad" title="360° view">🧭</button>
+      <button data-panel="fullscreen" title="Fullscreen">⛶</button>
+    </div>
+
+    <!-- touch play controls (walk / drive / drone) -->
+    <div class="touchpad hidden" id="touchpad">
+      <div class="joystick" id="joystick"><div class="joy-knob" id="joy-knob"></div></div>
+      <div class="touch-actions" id="touch-actions"></div>
     </div>
 
     <!-- build bar -->

@@ -50,6 +50,9 @@ controls.maxPolarAngle = 1.52;
 controls.zoomToCursor = true;
 controls.zoomSpeed = 1.2;
 controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+function setTouchMode(drawing) {
+  controls.touches = drawing ? { ONE: -1, TWO: THREE.TOUCH.DOLLY_PAN } : { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+}
 function setMouseMode(building) {
   controls.mouseButtons = building
     ? { LEFT: -1, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN }
@@ -126,8 +129,14 @@ scene.add(moon, moon.target);
 
 /* ---------- quality: post-processing, shadows, grass density ---------- */
 const gfx = new Graphics(renderer, scene, camera, sun);
-let quality = 'high';
-try { quality = localStorage.getItem('purpose-green-quality') || 'high'; } catch { /* storage unavailable */ }
+// phones and tablets: touch layout, lighter defaults
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches || ('ontouchstart' in window && innerWidth < 1100);
+if (IS_TOUCH) document.body.classList.add('touch');
+const setCompact = () => document.body.classList.toggle('compact', IS_TOUCH || innerWidth < 860);
+setCompact();
+addEventListener('resize', setCompact);
+let quality = IS_TOUCH ? 'low' : 'high';
+try { quality = localStorage.getItem('purpose-green-quality') || quality; } catch { /* storage unavailable */ }
 let grass = null;
 const GRASS = { low: [0, 0], high: [22000, 12], ultra: [55000, 17] };
 function applyQuality(q) {
@@ -339,6 +348,8 @@ function selectTool(t) {
   rotManual = null;
   dragStart = touchStart = null;
   setMouseMode(t !== 'inspect');
+  setTouchMode(LINE_TOOLS.has(t));
+  if (IS_TOUCH && LINE_TOOLS.has(t)) toast('Drag one finger to draw · two fingers move the map', '');
   document.querySelectorAll('.tool').forEach((el) => el.classList.toggle('on', el.dataset.tool === t));
   if (ghost) { scene.remove(ghost); ghost = null; }
   if (DEFS[t] && t !== 'road' && t !== 'rail') {
@@ -452,10 +463,14 @@ function applyLine(a, b) {
   if (!n && tool === 'road') toast(canPlace('road', b.i, b.j).reason || 'Nothing to build', 'bad');
 }
 
+const fingers = new Set();
 canvas.addEventListener('pointerdown', (e) => {
+  fingers.add(e.pointerId);
   downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
   if (!started || walking) return;
-  if (e.button === 0 && e.pointerType === 'mouse' && LINE_TOOLS.has(tool)) {
+  // a second finger means the player wants to move the map, not draw
+  if (fingers.size > 1) { dragStart = null; downAt = null; hover = null; updatePreview(); return; }
+  if (e.button === 0 && LINE_TOOLS.has(tool)) {
     const h = pickGround(e.clientX, e.clientY);
     if (h) dragStart = h;
   }
@@ -463,12 +478,14 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   mouseX = e.clientX; mouseY = e.clientY;
   if (!started || walking) return;
+  if (e.pointerType !== 'mouse' && !dragStart && fingers.size) return; // panning: skip expensive picking
   const h = pickGround(e.clientX, e.clientY);
   if (h && (!hover || h.i !== hover.i || h.j !== hover.j || DEFS[tool]?.size === 2)) { hover = h; updatePreview(); }
   else if (!h) { hover = null; updatePreview(); }
   else setLabel($('cursor-label').textContent, $('cursor-label').classList.contains('bad'));
 });
 canvas.addEventListener('pointerleave', () => { hover = null; updatePreview(); });
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, (e) => fingers.delete(e.pointerId));
 canvas.addEventListener('pointerup', (e) => {
   if (!started || walking || !downAt) return;
   const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
@@ -485,14 +502,8 @@ canvas.addEventListener('pointerup', (e) => {
   downAt = null;
   if (tool === 'inspect') { inspectAt(e.clientX, e.clientY, h); return; }
   if (!h) return;
-  if (LINE_TOOLS.has(tool)) {
-    // touch: first tap sets the start, second tap builds the line
-    if (e.pointerType !== 'mouse') {
-      if (!touchStart) { touchStart = h; hover = h; updatePreview(); toast('Tap the end point', ''); return; }
-      applyLine(touchStart, h);
-      touchStart = null;
-    } else applyLine(h, h);
-  } else applyAt(h);
+  if (LINE_TOOLS.has(tool)) applyLine(h, h);
+  else applyAt(h);
   hover = h;
   updatePreview();
 });
@@ -545,7 +556,7 @@ function startFirstPerson(x, z) {
 
 /** On foot: a physics body with mass, gravity, jumping, swimming and collisions. */
 function enterWalk() {
-  if (!canvas.requestPointerLock || matchMedia('(pointer: coarse)').matches) { toast('Walk mode needs a mouse and keyboard', 'bad'); return; }
+
   if (driving) exitFirstPerson(true);
   const off = camera.position.clone().sub(controls.target);
   yaw = Math.atan2(-off.x, -off.z);
@@ -562,13 +573,14 @@ function enterWalk() {
   }
   startFirstPerson(x, z);
   physics.spawnPlayer(x, z);
-  $('walk-hint').innerHTML = '🚶 On foot · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · <kbd>Space</kbd> jump · <b>Click</b> throw a ball · <kbd>C</kbd> drive · <kbd>Esc</kbd> map';
-  canvas.requestPointerLock();
+  $('walk-hint').innerHTML = IS_TOUCH ? '🚶 On foot · joystick to walk · drag to look' : '🚶 On foot · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> run · <kbd>Space</kbd> jump · <b>Click</b> throw a ball · <kbd>C</kbd> drive · <kbd>Esc</kbd> map';
+  if (!IS_TOUCH && canvas.requestPointerLock) canvas.requestPointerLock();
+  showTouchpad('walk');
 }
 
 /** Behind the wheel: a raycast-suspension vehicle on the real terrain. */
 function enterDrive() {
-  if (matchMedia('(pointer: coarse)').matches) { toast('Driving needs a keyboard', 'bad'); return; }
+
   let best = null, bd = Infinity;
   const ti = Math.floor((walking ? walkPos.x : controls.target.x) / T), tj = Math.floor((walking ? walkPos.z : controls.target.z) / T);
   for (let a = -30; a <= 30; a++) for (let b = -30; b <= 30; b++) {
@@ -587,7 +599,8 @@ function enterDrive() {
   yaw = heading;
   physics.spawnCar(x, z, heading);
   chase.set(x - Math.sin(heading) * 2, walkPos.y + 1, z - Math.cos(heading) * 2);
-  $('walk-hint').innerHTML = '🚗 <b id="speedo">0 km/h</b> · <kbd>W</kbd> gas · <kbd>S</kbd> brake/reverse · <kbd>A</kbd><kbd>D</kbd> steer · <kbd>Space</kbd> handbrake · <kbd>R</kbd> flip back · <kbd>F</kbd> get out · <kbd>Esc</kbd> map';
+  showTouchpad('drive');
+  $('walk-hint').innerHTML = IS_TOUCH ? '🚗 <b id="speedo">0 km/h</b> · joystick to drive' : '🚗 <b id="speedo">0 km/h</b> · <kbd>W</kbd> gas · <kbd>S</kbd> brake/reverse · <kbd>A</kbd><kbd>D</kbd> steer · <kbd>Space</kbd> handbrake · <kbd>R</kbd> flip back · <kbd>F</kbd> get out · <kbd>Esc</kbd> map';
 }
 
 function exitFirstPerson(silent = false) {
@@ -597,6 +610,7 @@ function exitFirstPerson(silent = false) {
   const wasFlying = flying;
   flying = false;
   $('dronepad').classList.add('hidden');
+  showTouchpad(null);
   if (wasFlying && !silent) {
     controls.enabled = true;
     $('hud').classList.remove('walking');
@@ -618,6 +632,77 @@ function exitFirstPerson(silent = false) {
 }
 const exitWalk = () => exitFirstPerson();
 
+/* ---------- touch play controls: joystick + action buttons ---------- */
+const joy = { x: 0, y: 0, run: false, id: null };
+const TOUCH_ACTIONS = {
+  walk: [['⤴', 'Jump', 'hold: '], ['🏃', 'Run', 'toggle:run'], ['⚽', 'Throw', 'ball'], ['🚗', 'Drive', 'drive'], ['✕', 'Map', 'exit']],
+  drive: [['🅿️', 'Brake', 'hold: '], ['↻', 'Flip', 'flip'], ['🚶', 'Get out', 'getout'], ['✕', 'Map', 'exit']],
+  drone: [['⤒', 'Up', 'hold:e'], ['⤓', 'Down', 'hold:q'], ['⚡', 'Fast', 'hold:shift'], ['✕', 'Map', 'exit']],
+};
+function showTouchpad(mode) {
+  const pad = $('touchpad');
+  if (!IS_TOUCH || !mode) { pad.classList.add('hidden'); joy.x = joy.y = 0; joy.run = false; return; }
+  pad.classList.remove('hidden');
+  $('touch-actions').innerHTML = TOUCH_ACTIONS[mode].map(([icon, label, act]) => `<button data-act="${act}"><b>${icon}</b><small>${label}</small></button>`).join('');
+}
+{
+  const stick = $('joystick'), knob = $('joy-knob');
+  const move = (e) => {
+    const r = stick.getBoundingClientRect();
+    const R = r.width / 2;
+    let dx = (e.clientX - (r.left + R)) / R, dy = (e.clientY - (r.top + R)) / R;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    joy.x = dx; joy.y = -dy;
+    knob.style.transform = `translate(${dx * R * 0.6}px, ${dy * R * 0.6}px)`;
+  };
+  stick.addEventListener('pointerdown', (e) => { e.preventDefault(); joy.id = e.pointerId; stick.setPointerCapture(e.pointerId); move(e); });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === joy.id) move(e); });
+  const end = (e) => { if (e.pointerId !== joy.id) return; joy.id = null; joy.x = joy.y = 0; knob.style.transform = ''; };
+  stick.addEventListener('pointerup', end);
+  stick.addEventListener('pointercancel', end);
+  const actions = $('touch-actions');
+  actions.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    e.preventDefault();
+    const act = b.dataset.act;
+    if (act.startsWith('hold:')) {
+      const k = act.slice(5) || ' ';
+      keys.add(k);
+      b.classList.add('on');
+      const up = () => { keys.delete(k); b.classList.remove('on'); b.removeEventListener('pointerup', up); b.removeEventListener('pointerleave', up); };
+      b.addEventListener('pointerup', up); b.addEventListener('pointerleave', up);
+    }
+    if (act === 'toggle:run') { joy.run = !joy.run; b.classList.toggle('on', joy.run); }
+    if (act === 'ball') {
+      const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+      physics.throwBall(camera.position.clone().addScaledVector(dir, 0.12), dir);
+    }
+    if (act === 'drive') enterDrive();
+    if (act === 'flip') physics.resetCar();
+    if (act === 'getout') { const x = walkPos.x, z = walkPos.z; exitFirstPerson(true); controls.target.set(x, 0, z); enterWalk(); }
+    if (act === 'exit') exitFirstPerson();
+  });
+}
+
+/* ---------- mobile dock: panels open on demand ---------- */
+$('dock').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-panel]');
+  if (!b) return;
+  const p = b.dataset.panel;
+  if (p === 'fullscreen') {
+    const d = document.documentElement;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else (d.requestFullscreen || d.webkitRequestFullscreen)?.call(d);
+    return;
+  }
+  const el = $(p);
+  const open = !el.classList.contains('show');
+  for (const id of ['needs', 'mapbox', 'viewpad']) { $(id).classList.remove('show'); document.querySelector(`#dock [data-panel="${id}"]`)?.classList.remove('on'); }
+  if (open) { el.classList.add('show'); b.classList.add('on'); if (p === 'needs') el.classList.add('open'); }
+});
+
 /* ---------- 360° viewing ---------- */
 let flying = false;
 const look = { dragging: false, x: 0, y: 0, yaw: 0, pitch: 0, last: 0, spin: false };
@@ -629,8 +714,8 @@ function enterDrone() {
   startFirstPerson(camera.position.x, camera.position.z);
   walkPos.copy(camera.position);
   flying = true;
-  $('walk-hint').innerHTML = '🛸 Drone · drag to look 360° · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>E</kbd>/<kbd>Q</kbd> up/down · <kbd>Shift</kbd> fast · <kbd>Esc</kbd> map';
-  $('dronepad').classList.remove('hidden');
+  $('walk-hint').innerHTML = IS_TOUCH ? '🛸 Drone · joystick to fly · drag to look' : '🛸 Drone · drag to look 360° · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>E</kbd>/<kbd>Q</kbd> up/down · <kbd>Shift</kbd> fast · <kbd>Esc</kbd> map';
+  if (IS_TOUCH) showTouchpad('drone'); else $('dronepad').classList.remove('hidden');
 }
 canvas.addEventListener('pointerdown', (e) => {
   if (!walking || (document.pointerLockElement === canvas)) return;
@@ -725,6 +810,7 @@ function updateCamera(dt) {
     if (keys.has('s') || keys.has('arrowdown')) walkPos.addScaledVector(dir, -speed);
     if (keys.has('a') || keys.has('arrowleft')) walkPos.addScaledVector(right, -speed);
     if (keys.has('d') || keys.has('arrowright')) walkPos.addScaledVector(right, speed);
+    walkPos.addScaledVector(dir, speed * joy.y).addScaledVector(right, speed * joy.x);
     if (keys.has('e') || keys.has(' ')) walkPos.y += speed;
     if (keys.has('q')) walkPos.y -= speed;
     if (look.spin) yaw += dt * 0.35;
@@ -736,8 +822,8 @@ function updateCamera(dt) {
   }
   if (walking && driving && physics.car) {
     const input = {
-      throttle: (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0),
-      steer: (keys.has('a') || keys.has('arrowleft') ? 1 : 0) - (keys.has('d') || keys.has('arrowright') ? 1 : 0),
+      throttle: clamp((keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0) + (Math.abs(joy.y) > 0.25 ? Math.sign(joy.y) : 0), -1, 1),
+      steer: clamp((keys.has('a') || keys.has('arrowleft') ? 1 : 0) - (keys.has('d') || keys.has('arrowright') ? 1 : 0) - joy.x, -1, 1),
       handbrake: keys.has(' '),
     };
     physics.driveCar(input, dt);
@@ -761,9 +847,9 @@ function updateCamera(dt) {
   }
   if (walking && physics.player) {
     const input = {
-      fwd: (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0),
-      right: (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0),
-      run: keys.has('shift'),
+      fwd: clamp((keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0) + joy.y, -1, 1),
+      right: clamp((keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0) + joy.x, -1, 1),
+      run: keys.has('shift') || joy.run || Math.hypot(joy.x, joy.y) > 0.95,
       jump: keys.has(' '),
     };
     physics.drivePlayer(input, yaw, dt);
@@ -1134,6 +1220,8 @@ function renderHUD() {
     ? alerts.map((a) => `<li class="s${a.sev}"><span>${a.icon}</span><span>${a.text}</span></li>`).join('')
     : '<li class="ok"><span>✅</span><span>Everything is running smoothly. Keep growing!</span></li>';
   refreshAffordability();
+  const urgent = G.alerts.filter((a) => a.sev >= 2).length;
+  $('dock-badge').textContent = urgent || '';
   drawSpark();
   $('coords').textContent = `${Math.round(controls.target.x / T)}, ${Math.round(controls.target.z / T)}`;
 }
@@ -1425,9 +1513,9 @@ const spawn = new THREE.Vector3();
 let started = false;
 function boot(seed) {
   G.seed = seed;
-  terrain = new Terrain(scene, seed, { isRoad, isRail, isBlocked: (i, j) => !!tileAt(i, j) });
+  terrain = new Terrain(scene, seed, { isRoad, isRail, isBlocked: (i, j) => !!tileAt(i, j), viewChunks: IS_TOUCH ? 3 : 4 });
   bindTerrain(terrain);
-  agents = new Agents(scene, terrain);
+  agents = new Agents(scene, terrain, IS_TOUCH ? { maxCars: 90, maxPeds: 80 } : {});
   transport = new Transport(scene, terrain);
   physics = new Physics(scene, terrain);
   bindNature(terrain, { onEvent: (t, k) => feed(t, k), onIgnite: (b) => hooks.onFire(b, true) });

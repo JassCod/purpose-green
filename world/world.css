@@ -11,7 +11,7 @@
   --shadow: 0 12px 30px -14px rgba(10, 40, 25, 0.5);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow: hidden; }
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
 body { font-family: "Nunito", system-ui, sans-serif; color: var(--ink); background: #9fd6f5; user-select: none; -webkit-user-select: none; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 kbd { font-family: inherit; font-size: .75em; padding: 1px 6px; border-radius: 6px; background: rgba(255,255,255,.92); color: var(--ink); border-bottom: 2px solid #c9d6cd; margin: 0 1px; }
@@ -162,7 +162,7 @@ input[type=range] { width: 100%; accent-color: var(--green); margin-top: 6px; }
 .row { display: flex; gap: 6px; margin-top: 8px; }
 
 .walk-hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 9px 16px; border-radius: 14px; background: rgba(21,48,31,.88); color: #fff; font-weight: 800; font-size: .84rem; white-space: nowrap; }
-#hud.walking > *:not(.walk-hint):not(.toasts):not(.feed):not(.dronepad) { display: none; }
+#hud.walking > *:not(.walk-hint):not(.toasts):not(.feed):not(.dronepad):not(.touchpad) { display: none; }
 #hud.walking::after { content: ""; position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.3); }
 
 /* ---------- title ---------- */
@@ -221,3 +221,67 @@ input[type=range] { width: 100%; accent-color: var(--green); margin-top: 6px; }
   .needs, .mapbox { bottom: 140px; }
   .inspector { top: 100px; }
 }
+
+
+/* ================================================================== */
+/*  Phones & tablets (body.compact is set for touch devices and narrow windows) */
+/* ================================================================== */
+.dock, .touchpad { display: none; }
+body.compact .top { top: calc(6px + env(safe-area-inset-top)); left: calc(6px + env(safe-area-inset-left)); right: calc(6px + env(safe-area-inset-right)); gap: 4px; flex-wrap: wrap; }
+body.compact .brand { display: none; }
+body.compact .chips { order: 3; flex-basis: 100%; justify-content: flex-start; gap: 4px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+body.compact .chips::-webkit-scrollbar { display: none; }
+body.compact .chip { flex: 0 0 auto; padding: 3px 8px 3px 3px; gap: 4px; border-radius: 12px; }
+body.compact .chip i { width: 24px; height: 24px; font-size: .8rem; border-radius: 8px; }
+body.compact .chip b { font-size: .8rem; }
+body.compact .chip small { display: none; }
+body.compact #c-food { display: flex; }
+body.compact .clock { margin-left: auto; padding: 4px 4px 4px 10px; }
+body.compact .clock .time small { display: block; font-size: .58rem; }
+body.compact .speeds button { padding: 8px 9px; font-size: .78rem; }
+
+/* dock of round buttons on the right edge */
+body.compact .dock { display: flex; flex-direction: column; gap: 8px; position: absolute; right: calc(8px + env(safe-area-inset-right)); top: calc(env(safe-area-inset-top) + 96px); pointer-events: auto; }
+.dock button { position: relative; width: 46px; height: 46px; border-radius: 50%; background: var(--panel); border: 2px solid var(--edge); box-shadow: var(--shadow); font-size: 1.15rem; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.dock button.on { background: var(--green); }
+.dock i { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--red); color: #fff; font-style: normal; font-size: .62rem; font-weight: 800; line-height: 18px; padding: 0 4px; }
+.dock i:empty { display: none; }
+
+/* panels become sheets that open from the dock */
+body.compact .needs, body.compact #mapbox, body.compact .viewpad { display: none; }
+body.compact .needs.show { display: flex; position: absolute; left: calc(8px + env(safe-area-inset-left)); right: 64px; top: calc(env(safe-area-inset-top) + 96px); bottom: auto; width: auto; max-height: 52vh; }
+body.compact .needs.show .needs-body { display: block; }
+body.compact #mapbox.show { display: block; position: absolute; right: 64px; top: calc(env(safe-area-inset-top) + 96px); bottom: auto; }
+body.compact #mapbox.show #minimap { width: 170px; height: 170px; }
+body.compact .map-btns button { width: 34px; height: 34px; font-size: .95rem; }
+body.compact .viewpad.show { display: grid; position: absolute; right: 64px; top: calc(env(safe-area-inset-top) + 96px); bottom: auto; grid-template-columns: repeat(3, 44px); }
+body.compact .viewpad.show button { width: 44px; height: 44px; font-size: 1.05rem; }
+body.compact .inspector { left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right)); width: auto; top: auto; bottom: calc(env(safe-area-inset-bottom) + 158px); max-height: 42vh; }
+
+/* build bar: full width, big touch targets */
+body.compact .build { left: calc(6px + env(safe-area-inset-left)); right: calc(6px + env(safe-area-inset-right)); bottom: calc(6px + env(safe-area-inset-bottom)); transform: none; max-width: none; padding: 6px; border-radius: 18px; }
+body.compact .cats button { padding: 8px 12px; font-size: .78rem; }
+body.compact .tool { width: 64px; height: 66px; }
+body.compact .tool .em { font-size: 1.45rem; }
+body.compact .feed, body.compact .tip, body.compact .cursor-label { display: none !important; }
+body.compact .toasts { top: calc(env(safe-area-inset-top) + 100px); width: min(92vw, 420px); }
+body.compact .toast { white-space: normal; text-align: center; font-size: .8rem; }
+body.compact .walk-hint { top: calc(env(safe-area-inset-top) + 8px); bottom: auto; font-size: .72rem; white-space: normal; text-align: center; max-width: 92vw; }
+body.touch .walk-hint kbd { display: none; }
+
+/* joystick + action buttons while walking, driving or flying */
+body.touch .touchpad { display: block; position: absolute; inset: 0; pointer-events: none !important; }
+body.touch .touchpad.hidden { display: none !important; }
+.joystick { position: absolute; left: calc(22px + env(safe-area-inset-left)); bottom: calc(28px + env(safe-area-inset-bottom)); width: 140px; height: 140px; border-radius: 50%; background: rgba(255,255,255,.18); border: 2px solid rgba(255,255,255,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: auto; touch-action: none; }
+.joy-knob { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px; border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .05s; }
+.touch-actions { position: absolute; right: calc(18px + env(safe-area-inset-right)); bottom: calc(28px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(2, 66px); gap: 10px; pointer-events: auto; }
+.touch-actions button { width: 66px; height: 66px; border-radius: 50%; background: rgba(255,255,255,.85); box-shadow: 0 4px 14px rgba(0,0,0,.3); display: flex; flex-direction: column; align-items: center; justify-content: center; touch-action: none; }
+.touch-actions button b { font-size: 1.4rem; line-height: 1; }
+.touch-actions button small { font-size: .58rem; font-weight: 800; color: var(--soft); }
+.touch-actions button.on { background: var(--green); color: #fff; }
+.touch-actions button.on small { color: #fff; }
+
+/* title screen on small screens */
+body.compact .title-card { padding: 22px 16px; border-radius: 26px; }
+body.compact #title p { font-size: .92rem; }
+body.compact .keys { display: none; }

@@ -23,8 +23,10 @@ const VEHICLES = {
 };
 
 export class Agents {
-  constructor(scene, terrain) {
+  constructor(scene, terrain, { maxCars = MAX_CARS, maxPeds = MAX_PEDS } = {}) {
     this.terrain = terrain;
+    this.maxCars = maxCars;
+    this.maxPeds = maxPeds;
     this.cars = [];
     this.peds = [];
     this.rigs = {};
@@ -54,7 +56,7 @@ export class Agents {
   }
 
   addVehicle(model, from, to, extra = {}) {
-    if (!from?.road || !to?.road || from.comp !== to.comp || this.cars.length >= MAX_CARS) return null;
+    if (!from?.road || !to?.road || from.comp !== to.comp || this.cars.length >= this.maxCars) return null;
     const path = findPath(from.road, to.road);
     if (!path || path.length < 2) return null;
     const v = { path, seg: 0, t: 0, model, pos: new THREE.Vector3(), yaw: 0, spin: 0, cid: null, color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)], kind: model, ...extra };
@@ -175,7 +177,7 @@ export class Agents {
       while (this.spawnAcc >= 1 && n < 3) {
         this.spawnAcc -= 1;
         n++;
-        if (this.cars.length >= MAX_CARS) { this.spawnAcc = 0; break; }
+        if (this.cars.length >= this.maxCars) { this.spawnAcc = 0; break; }
         const r = Math.random();
         this.spawnTrip(rush ? (r < 0.75 ? 'commute' : r < 0.87 ? 'bus' : 'truck') : day ? (r < 0.55 ? 'errand' : r < 0.75 ? 'truck' : r < 0.85 ? 'bus' : 'commute') : 'errand');
       }
@@ -183,7 +185,7 @@ export class Agents {
       this.pedAcc += pop * (day ? 0.03 : 0.004) * dt;
       while (this.pedAcc >= 1) {
         this.pedAcc -= 1;
-        if (this.peds.length < MAX_PEDS) this.spawnWalker();
+        if (this.peds.length < this.maxPeds) this.spawnWalker();
       }
       this.pedAcc = Math.min(this.pedAcc, 5);
       this.dispatchTimer += dt;
